@@ -7,7 +7,7 @@ int main(){
     assert(next.left==200-prev.left-prev.width);assert(next.width==prev.width);
     assert(echo::lyric_display(" \t\n")=="...");assert(echo::lyric_display("Line A")=="Line A");
     assert(echo::lyric_ease(0)==0&&echo::lyric_ease(1)==1);assert(echo::lyric_ease(.5)>.5);
-    assert(echo::title_scroll(0,10)==0&&echo::title_scroll(240,1)==0);assert(echo::title_scroll(240,6.5)==120);assert(echo::title_scroll(240,12)==240);assert(echo::title_scroll(240,13)==0);assert(echo::title_scroll(240,19.5)==120);
+    assert(echo::title_scroll(0,10)==0);assert(echo::title_scroll(240,5)==120);assert(echo::title_scroll(240,12)==288);assert(echo::title_scroll(240,13)==8);double period=304.0/24;double before=echo::title_scroll(240,period-.001),after=echo::title_scroll(240,period+.001);assert(std::abs((after+304)-before-.048)<.0001);
     assert(echo::analog_scroll_speed(3000,-3000)==0);assert(echo::analog_scroll_speed(-32767,0)>479);assert(echo::analog_scroll_speed(0,32767)<-479);assert(echo::analog_scroll_speed(0,-32767)==echo::analog_scroll_speed(-32767,0));
     assert(echo::audio_target_label(1)=="Speaker"&&echo::audio_target_label(2)=="Headset"&&echo::audio_target_label(5)=="Bluetooth"&&echo::audio_target_label(0)=="Audio: --");
     SDL_Init(SDL_INIT_VIDEO);auto* window=SDL_CreateWindow("test",0,0,64,36,0);auto* renderer=SDL_CreateRenderer(window,-1,SDL_RENDERER_SOFTWARE);
