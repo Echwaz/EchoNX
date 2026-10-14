@@ -69,6 +69,7 @@ inline std::vector<Song> songs(const Json& root, size_t limit=40) {
     };
     walk(root);return out;
 }
+inline void inherit_album_cover(std::vector<Song>& rows,const std::string& cover){for(auto& song:rows)if(song.cover.empty())song.cover=cover;}
 inline Json to_json(const Song& s) {return {{"id",s.id},{"title",s.title},{"artist",s.artist},{"cover",s.cover},{"duration",s.duration},{"artistId",s.artistId},{"albumId",s.albumId},{"album",s.album}};}
 inline Song from_json(const Json& j) {return {str(j,"/id"),str(j,"/title"),str(j,"/artist"),str(j,"/cover"),str(j,"/duration"),str(j,"/artistId"),str(j,"/albumId"),str(j,"/album")};}
 }

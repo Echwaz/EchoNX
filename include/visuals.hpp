@@ -16,7 +16,7 @@ template<class Inside> inline SDL_Surface* smooth_shape(int width,int height,SDL
 inline Triangle skip_shape(int center,bool next){return {center+(next?-14:-12),26,13,next};}
 inline std::string lyric_display(const std::string& s){return s.find_first_not_of(" \t\r\n")==std::string::npos?"...":s;}
 inline double lyric_ease(double t){t=std::clamp(t,0.0,1.0);return 1-std::pow(1-t,3);}
-inline double title_scroll(double overflow,double seconds){if(overflow<=0)return 0;double travel=overflow/24.0,t=std::fmod(std::max(0.0,seconds),2*travel+3);if(t<1.5)return 0;t-=1.5;if(t<travel)return t*24;t-=travel;if(t<1.5)return overflow;return std::max(0.0,overflow-(t-1.5)*24);}
+inline double title_scroll(double overflow,double seconds){if(overflow<=0)return 0;double travel=overflow/24.0,t=std::fmod(std::max(0.0,seconds),travel+3);if(t<1.5)return 0;return std::min(overflow,(t-1.5)*24);}
 inline float analog_scroll_speed(int left,int right){int value=std::abs(left)>=std::abs(right)?left:right;float normalized=std::clamp(value/32767.f,-1.f,1.f);constexpr float dead=.22f;if(std::abs(normalized)<=dead)return 0;return -std::copysign((std::abs(normalized)-dead)/(1-dead)*480,normalized);}
 inline std::string audio_target_label(int target){switch(target){case 1:return "Speaker";case 2:return "Headset";case 3:return "TV audio";case 4:return "USB audio";case 5:return "Bluetooth";default:return "Audio: --";}}
 inline SDL_Texture* album_blur(SDL_Renderer* renderer,SDL_Surface* source,float brightness=.19f){

@@ -110,6 +110,10 @@ The host tests can be configured independently with CMake from `tests/`. They co
 
 EchoNX is not affiliated with Nintendo, Google, YouTube, or Echo Music.
 
+## AI-assisted development
+
+EchoNX was developed with AI assistance, including help with implementation, debugging, and documentation. AI-generated code may contain mistakes; testing and review are ongoing.
+
 ## License
 
 **GPL-3.0**. See [LICENSE](LICENSE). Third-party components retain their respective licenses.

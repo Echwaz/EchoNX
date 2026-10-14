@@ -68,9 +68,10 @@ std::vector<Song> Api::artist(const Song& selected){
 }
 std::vector<Song> Api::album(const Song& selected){
     Song anchor=selected;
-    if(anchor.albumId.empty())for(const auto& song:search(anchor.title+" "+anchor.artist))if(song.id==anchor.id&&!song.albumId.empty()){anchor.albumId=song.albumId;anchor.album=song.album;break;}
+    if(anchor.albumId.empty())for(const auto& song:search(anchor.title+" "+anchor.artist))if(song.id==anchor.id&&!song.albumId.empty()){anchor.albumId=song.albumId;anchor.album=song.album;if(anchor.cover.empty())anchor.cover=song.cover;break;}
     if(anchor.albumId.empty())throw std::runtime_error("No album page is attached to this song.");
     std::lock_guard<std::mutex> lock(mutex_);auto rows=songs(call("browse",{{"browseId",anchor.albumId}}),120);
+    inherit_album_cover(rows,anchor.cover);
     for(auto& song:rows){song.albumId=anchor.albumId;song.album=anchor.album;if(song.artistId.empty()){song.artist=anchor.artist;song.artistId=anchor.artistId;}}
     return rows;
 }
