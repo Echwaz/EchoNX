@@ -16,4 +16,4 @@ target_link_options(echonx PRIVATE -specs=/opt/devkitpro/libnx/switch.specs -Wl,
 target_link_libraries(echonx PRIVATE ${DEPS_STATIC_LIBRARIES} nx mbedtls mbedx509 mbedcrypto)
 add_custom_target(echonx.nro ALL DEPENDS echonx
     COMMAND /opt/devkitpro/tools/bin/nacptool --create "EchoNX" "Community prototype" "${PROJECT_VERSION}" echonx.nacp
-    COMMAND /opt/devkitpro/tools/bin/elf2nro echonx.elf echonx.nro --nacp=echonx.nacp --romfsdir=${CMAKE_SOURCE_DIR}/romfs)
+    COMMAND /opt/devkitpro/tools/bin/elf2nro echonx.elf echonx.nro --icon=${CMAKE_SOURCE_DIR}/icon.jpg --nacp=echonx.nacp --romfsdir=${CMAKE_SOURCE_DIR}/romfs) 
