@@ -4,6 +4,10 @@
 
 EchoNX is a native homebrew music player for Switch consoles running custom firmware. Search for a song, build your library, and listen with artwork and lyrics in a fullscreen player.
 
+<p align="center">
+  <img src="docs/fullscreen.jpg" width="90%" alt="EchoNX fullscreen music player with album artwork, lyrics, and playback controls">
+</p>
+
 ## Features
 
 - **Standalone streaming:** music plays directly on the Switch over Wi-Fi.
@@ -37,6 +41,12 @@ Your saved library lives at `sd:/switch/echonx/library.json`.
 - **Screen off means backlight off:** it is not Switch sleep mode. Playback stays inside EchoNX and does not run over other games.
 - **Lyrics and album details vary:** some songs have synced lyrics, some have plain lyrics, and others have none.
 - **Still in development:** service changes and network interruptions can affect playback. Artwork cache limits and streaming retries are implemented, but long-session stability still needs device testing.
+
+## Screenshots
+
+| Main screen | Fullscreen player |
+| --- | --- |
+| ![EchoNX main screen](docs/main.jpg) | ![EchoNX fullscreen player](docs/fullscreen.jpg) |
 
 ## Controls
 
