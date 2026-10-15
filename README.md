@@ -17,7 +17,7 @@ EchoNX is a native homebrew music player for Switch consoles running custom firm
 - **Lyrics:** animated synced lyrics, plus touch scrolling for lyrics without timestamps.
 - **Touch and controller navigation:** swipe lists, or select songs with directional buttons and either analog stick.
 - **Playback controls:** queue, pause, previous/next, tap-to-seek, shuffle, and repeat (off, all, or one).
-- **Album art mode:** centered artwork with rounded corners, a soft shadow, and a solid background sampled from the cover. Press + to enter or leave; other app inputs are locked.
+- **Album art mode:** centered artwork with rounded corners, a soft shadow, and a solid background sampled from the cover. Press + to enter or leave and − to toggle the backlight; tap the lit screen to toggle a large bold clock over a blurred backdrop. Battery percentage and a charging indicator are shown across views. Other app inputs are locked.
 - **Audio output indicator:** see whether audio is routed to speakers, a headset, or another output.
 
 ## What you need
@@ -59,14 +59,14 @@ Your saved library lives at `sd:/switch/echonx/library.json`.
 | Up/down or either analog stick | Move the song selection |
 | L / R | Switch tabs |
 | ZL / ZR | Previous / next song |
-| − | Save or remove the current song from your library |
+| − | Save/remove the current song; in album art mode, toggle the backlight |
 | + | Enter or leave album art mode |
 | Right stick click | Exit the app |
 | Left stick click | Open the artist page |
 
 **Touchscreen:** swipe the song list or plain lyrics, tap or drag the progress bar to seek, and tap the cover to enter or leave fullscreen. In fullscreen, tap the artist or album name to open its page.
 
-In album art mode, touch and other app controls are ignored. Press **+** to return to the previous view. Artwork follows the playing song, including automatic track changes.
+In album art mode, press **−** to turn the backlight off or on while music continues. While the screen is lit, tap to show or hide the clock. Other app controls are ignored. Press **+** to turn the screen on and return to the previous view. This does not put the console to sleep. Artwork follows the playing song, including automatic track changes.
 
 ## Persistent cache
 
@@ -125,3 +125,5 @@ EchoNX was developed with AI assistance, including help with implementation, deb
 ## License
 
 **GPL-3.0**. See [LICENSE](LICENSE). Third-party components retain their respective licenses.
+
+The clock uses Barlow SemiBold, licensed under the SIL Open Font License; see [font license](romfs/fonts/OFL.txt).

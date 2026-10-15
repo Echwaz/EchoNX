@@ -1,4 +1,4 @@
-#include "album_art_mode.hpp"
+#include "clock_overlay.hpp"
 #include <cassert>
 #include <iostream>
 int main(){
@@ -11,6 +11,7 @@ int main(){
     SDL_FillRect(source,nullptr,SDL_MapRGBA(source->format,255,255,255,255));auto white=echo::album_art_color(source);assert(white.r==40);
     SDL_FillRect(source,nullptr,SDL_MapRGBA(source->format,0,0,0,255));auto black=echo::album_art_color(source);assert(black.r==40);
     SDL_FillRect(source,nullptr,SDL_MapRGBA(source->format,220,100,80,255));
+    auto* backdrop=echo::clock_backdrop(source);assert(backdrop&&backdrop->w==128&&backdrop->h==72);SDL_FreeSurface(backdrop);
     auto* art=SDL_CreateTextureFromSurface(renderer,source);
     SDL_SetRenderDrawColor(renderer,10,20,30,255);SDL_RenderClear(renderer);
     echo::rounded_album_art(renderer,art,{40,40,560,560});
