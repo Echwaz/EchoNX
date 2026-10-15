@@ -3,6 +3,9 @@
 #include "library_store.hpp"
 #include "touch_scroll.hpp"
 #include "visuals.hpp"
+#include "playback_order.hpp"
+#include "queue_actions.hpp"
+#include "playback_icons.hpp"
 #include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL_image.h>
 #include <fstream>
@@ -30,11 +33,11 @@ std::string clockText(double sec){int t=std::max(0,int(sec));return std::to_stri
 struct Hit {SDL_Rect rect;std::function<void()> action;};
 class App {
     SDL_Window* window_=nullptr;SDL_Renderer* renderer_=nullptr;std::map<int,TTF_Font*> fonts_;
-    std::map<std::string,SDL_Texture*> textures_,backgrounds_;std::vector<Hit> hits_;
+    std::map<std::string,SDL_Texture*> textures_,backgrounds_;std::vector<Hit> hits_;std::vector<Song> upcomingRows_;std::vector<int> upcomingIndices_;
     std::map<std::string,SDL_Texture*> shapeTextures_;
     struct TitleTexture{SDL_Texture* texture;int width,height;Uint32 started;};std::map<std::string,TitleTexture> titleTextures_;
     std::string lyricAnimationSong_;int lyricTarget_=-2;double lyricVisual_=0,lyricFrom_=0;Uint32 lyricAnimationStart_=0;std::map<std::string,int> lyricHeights_;Song pendingMetadata_;
-    Api api_;std::unique_ptr<Player> player_;std::thread fetch_,art_,lyricsWorker_;
+    PlaybackOrder playbackOrder_{unsigned(SDL_GetPerformanceCounter())};Api api_;std::unique_ptr<Player> player_;std::thread fetch_,art_,lyricsWorker_;
     std::atomic<bool> closing_{false},loading_{false};std::mutex dataMutex_;
     std::vector<Song> results_,searchRows_,artistRows_,albumRows_,relatedRows_,pending_,library_,queue_,artRequests_;std::map<std::string,std::string> artPending_;
     std::condition_variable lyricsCv_;Song lyricsRequest_;bool lyricsRequested_=false;std::map<std::string,Lyrics> lyricCache_,lyricPending_;
@@ -46,7 +49,7 @@ class App {
     PadState pad_;AppletHookCookie hook_{};bool audioControlReady_=false;
 #endif
     Uint32 audioPoll_=0;std::string audioRoute_="Audio: --";
-    Uint32 artworkRetry_=0,analogRepeat_=0;int analogDirection_=0;
+    Uint32 artworkRetry_=0,analogRepeat_=0;int analogDirection_=0;float homeScroll_=0;int homeSelection_=0;
     std::string libraryPath_;
     void color(SDL_Color c){SDL_SetRenderDrawColor(renderer_,c.r,c.g,c.b,c.a);}
     void rect(SDL_Rect r,SDL_Color c){color(c);SDL_RenderFillRect(renderer_,&r);}
@@ -77,7 +80,16 @@ class App {
         hits_.push_back({r,std::move(action)});
     }
     void togglePlayback(){if(current_.id.empty())search();else if(!player_->active())player_->play(current_);else player_->toggle();}
-    void transport(int center,int y){icon({center-137,y+10,64,64},0,[this]{next(-1);});icon({center-42,y,84,84},player_->active()&&!player_->paused()?2:1,[this]{togglePlayback();},true);icon({center+73,y+10,64,64},3,[this]{next(1);});}
+    void playbackMode(SDL_Rect r,bool shuffle){
+        bool enabled=shuffle?playbackOrder_.shuffle:playbackOrder_.repeat!=0;SDL_Color fg=enabled?ink:SDL_Color{145,148,157,255};
+        std::string key="mode|"+std::to_string(shuffle)+"|"+std::to_string(enabled);auto it=shapeTextures_.find(key);
+        if(it==shapeTextures_.end()){auto* s=playback_icon(shuffle,fg);if(s){auto* texture=SDL_CreateTextureFromSurface(renderer_,s);SDL_FreeSurface(s);if(texture)it=shapeTextures_.emplace(key,texture).first;}}
+        if(it!=shapeTextures_.end()){SDL_Rect dest{r.x+4,r.y+6,36,36};SDL_RenderCopy(renderer_,it->second,nullptr,&dest);}
+        if(!shuffle&&playbackOrder_.repeat==2)centeredLabel("1",{r.x+10,r.y+12,24,24},12,fg);
+        if(enabled)round({r.x+20,r.y+44,4,4},2,ink);
+        hits_.push_back({r,[this,shuffle]{if(shuffle){playbackOrder_.shuffle=!playbackOrder_.shuffle;playbackOrder_.reset(int(queue_.size()),queueIndex_);notice_=playbackOrder_.shuffle?"Shuffle on":"Shuffle off";}else{playbackOrder_.repeat=(playbackOrder_.repeat+1)%3;notice_=playbackOrder_.repeat==0?"Repeat off":playbackOrder_.repeat==1?"Repeat all":"Repeat one";}}});
+    }
+    void transport(int center,int y){playbackMode({center-175,y+18,44,48},true);icon({center-117,y+16,52,52},0,[this]{next(-1);});icon({center-42,y,84,84},player_->active()&&!player_->paused()?2:1,[this]{togglePlayback();},true);icon({center+65,y+16,52,52},3,[this]{next(1);});playbackMode({center+131,y+18,44,48},false);}
     void focusPlayer(){if(current_.id.empty()){search();return;}fullscreen_=true;requestLyrics(current_,true);}
     void requestLyrics(const Song& song,bool retry=false){auto found=lyricCache_.find(song.id);if(found!=lyricCache_.end()&&(!retry||!found->second.lines.empty()||!found->second.plain.empty()||found->second.status=="Instrumental"))return;lyricCache_[song.id]={{},{},"Loading lyrics..."};
 #ifdef ECHO_PREVIEW
@@ -87,9 +99,9 @@ class App {
 #endif
     }
     void cover(const Song& s,SDL_Rect r){auto it=textures_.find(s.id);if(it!=textures_.end())SDL_RenderCopy(renderer_,it->second,nullptr,&r);else{round(r,16,surface);if(r.w>100)label(s.title.empty()?"Music":s.title,r.x+20,r.y+r.h/2-16,28,muted,r.w-40);}}
-    std::vector<Song>& visible(){return tab_==2?library_:tab_==3?queue_:tab_==4?artistRows_:tab_==5?albumRows_:tab_==1?searchRows_:results_;}
+    std::vector<Song>& visible(){if(tab_==3){upcomingIndices_=playbackOrder_.displayOrder();upcomingRows_.clear();for(int i:upcomingIndices_)if(i>=0&&i<int(queue_.size()))upcomingRows_.push_back(queue_[i]);selected_=std::clamp(selected_,0,std::max(0,int(upcomingRows_.size())-1));return upcomingRows_;}return tab_==2?library_:tab_==4?artistRows_:tab_==5?albumRows_:tab_==1?searchRows_:results_;}
     void saveLibrary(){save_library(libraryPath_,library_);}
-    void favorite(){if(current_.id.empty()){notice_="Choose a song before saving it to your library.";return;}auto previous=library_;auto it=std::find_if(library_.begin(),library_.end(),[&](const Song& s){return s.id==current_.id;});if(it==library_.end())library_.push_back(current_);else library_.erase(it);try{saveLibrary();homeOffset_=0;fetch(0);notice_="Library updated";}catch(const std::exception& e){library_=std::move(previous);notice_=e.what();}}
+    void favorite(){if(current_.id.empty()){notice_="Choose a song before saving it to your library.";return;}auto previous=library_;auto it=std::find_if(library_.begin(),library_.end(),[&](const Song& s){return s.id==current_.id;});if(it==library_.end())library_.push_back(current_);else library_.erase(it);try{saveLibrary();homeOffset_=0;notice_="Library updated";}catch(const std::exception& e){library_=std::move(previous);notice_=e.what();}}
     static std::string pageKey(int mode,const Song& song){return mode==4?song.albumId+"|"+song.id:song.artistId+"|"+song.artist;}
     void fetch(int mode,const std::string& value=""){
         if(loading_){deferredMode_=mode;deferredValue_=value;return;}
@@ -133,16 +145,27 @@ class App {
         if(!loading_ && deferredMode_>=0){int mode=deferredMode_;auto value=deferredValue_;deferredMode_=-1;fetch(mode,value);}
     }
     void choose(int i){auto rows=visible();if(i<0||i>=int(rows.size()))return;
-        if(tab_!=3){queue_=rows;queueIndex_=i;}else queueIndex_=i;
+        if(tab_!=3){queue_.assign(rows.begin()+i,rows.end());queueIndex_=0;playbackOrder_.reset(int(queue_.size()),queueIndex_);}else{queueIndex_=upcomingIndices_[i];playbackOrder_.select(queueIndex_);selected_=i;}
         current_=queue_[queueIndex_];artwork({current_});player_->play(current_);fetch(2,current_.id);requestLyrics(current_);
     }
-    void next(int direction){if(queue_.empty()){notice_="Choose a song to start the queue.";return;}int i=queueIndex_+direction;if(i<0)i=0;
-        if(i>=int(queue_.size())){std::set<std::string> ids;for(auto& s:queue_)ids.insert(s.id);for(auto& s:relatedRows_)if(ids.insert(s.id).second)queue_.push_back(s);}
-        if(i<int(queue_.size())){queueIndex_=i;current_=queue_[i];artwork({current_});player_->play(current_);fetch(2,current_.id);requestLyrics(current_);}else notice_="Queue finished. Pick another song.";
+    void playNextSelected(){
+        if(fullscreen_){notice_="Select a song in the list, then press Y.";return;}
+        auto& rows=visible();if(selected_<0||selected_>=int(rows.size())){notice_="Select a song first.";return;}
+        Song song=rows[selected_];if(current_.id.empty()||queue_.empty()){choose(selected_);return;}
+        if(song.id==current_.id){notice_="This song is already playing.";return;}
+        if(enqueue_next(queue_,queueIndex_,song,playbackOrder_)){notice_="Playing next: "+song.title;if(tab_==3){selected_=0;listScroll_.reset();}}
+    }
+    void next(int direction,bool automatic=false){
+        if(queue_.empty()){notice_="Choose a song to start the queue.";return;}
+        if(playbackOrder_.size()!=int(queue_.size()))playbackOrder_.reset(int(queue_.size()),queueIndex_);
+        int i=playbackOrder_.step(direction,automatic);
+        if(i<0&&direction>0&&!playbackOrder_.shuffle&&playbackOrder_.repeat==0){std::set<std::string> ids;for(const auto& s:queue_)ids.insert(s.id);for(const auto& s:relatedRows_)if(ids.insert(s.id).second)queue_.push_back(s);playbackOrder_.reset(int(queue_.size()),queueIndex_);i=playbackOrder_.step(1);}
+        if(i<0){notice_="Queue finished. Pick another song.";return;}
+        queueIndex_=i;current_=queue_[i];artwork({current_});player_->play(current_);fetch(2,current_.id);requestLyrics(current_);
     }
     void openArtist(Song song={}){if(song.id.empty()){auto& rows=visible();if(selected_<int(rows.size()))song=rows[selected_];else song=current_;}if(song.artist.empty()){notice_="Choose a song with an artist first.";return;}artistAnchor_=song;artistRows_.clear();fullscreen_=false;tab_=4;selected_=0;listScroll_.reset();fetch(3);}
     void openAlbum(Song song={}){if(song.id.empty()){auto& rows=visible();if(selected_<int(rows.size()))song=rows[selected_];else song=current_;}if(song.id.empty()){notice_="Choose a song first.";return;}albumAnchor_=song;albumRows_.clear();fullscreen_=false;tab_=5;selected_=0;listScroll_.reset();fetch(4);}
-    void changeTab(int t){int next=(t+6)%6;if(next==4&&artistAnchor_.id.empty()){openArtist();return;}if(next==5&&albumAnchor_.id.empty()){openAlbum();return;}fullscreen_=false;tab_=next;selected_=0;listScroll_.reset();if(tab_==0){heading_="Discover";fetch(0);}if(tab_==1 && query_.empty())notice_="Press X or tap Search to enter a song or artist.";if(tab_==2)artwork(library_);}
+    void changeTab(int t){int next=(t+6)%6;bool refreshHome=tab_==0&&next==0;if(tab_==0&&next!=0){homeScroll_=listScroll_.offset;homeSelection_=selected_;}if(next==4&&artistAnchor_.id.empty()){openArtist();return;}if(next==5&&albumAnchor_.id.empty()){openAlbum();return;}fullscreen_=false;tab_=next;selected_=0;listScroll_.reset();if(tab_==0){heading_="Discover";if(refreshHome)fetch(0);else{selected_=homeSelection_;listScroll_.offset=homeScroll_;}}if(tab_==1 && query_.empty())notice_="Press X or tap Search to enter a song or artist.";if(tab_==2)artwork(library_);}
     void search(){
         std::string q;
 #ifdef __SWITCH__
@@ -165,7 +188,7 @@ class App {
     }
     void action(int key){if(screenOff_){wake();return;}
         auto& rows=visible();switch(key){
-        case 0:if(fullscreen_)togglePlayback();else choose(selected_);break;case 1:if(fullscreen_)fullscreen_=false;else changeTab(0);break;case 2:fullscreen_=false;search();break;case 3:togglePlayback();break;
+        case 0:if(fullscreen_)togglePlayback();else choose(selected_);break;case 1:if(fullscreen_)fullscreen_=false;else changeTab(0);break;case 2:fullscreen_=false;search();break;case 3:playNextSelected();break;
         case 4:if(selected_>0)--selected_;break;case 5:if(selected_+1<int(rows.size()))++selected_;break;
         case 6:changeTab(tab_-1);break;case 7:changeTab(tab_+1);break;case 8:next(-1);break;case 9:next(1);break;
         case 10:dark();break;case 11:favorite();break;case 12:running_=false;break;
@@ -184,7 +207,7 @@ public:
         renderer_=SDL_CreateRenderer(window_,-1,SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
         if(!renderer_)renderer_=SDL_CreateRenderer(window_,-1,SDL_RENDERER_SOFTWARE);
         if(!renderer_)throw std::runtime_error(SDL_GetError());SDL_RenderSetLogicalSize(renderer_,1280,720);SDL_SetRenderDrawBlendMode(renderer_,SDL_BLENDMODE_BLEND);
-        for(int size:{18,22,28,36,44}){
+        for(int size:{12,18,22,28,36,44}){
 #ifdef __SWITCH__
             PlFontData font{};if(R_FAILED(plGetSharedFontByType(&font,PlSharedFontType_Standard)))throw std::runtime_error("System font unavailable");fonts_[size]=TTF_OpenFontRW(SDL_RWFromConstMem(font.address,font.size),1,size);
 #else
@@ -258,7 +281,7 @@ public:
         cover(current_,{40,105,350,350});hits_.push_back({{40,105,350,350},[this]{focusPlayer();}});
         songTitle(current_.id.empty()?"Your next listen":current_.title,40,474,28,350);label(current_.id.empty()?"Pick a song on the right":current_.artist,40,512,22,muted,350);
         timeline(40,558,350);transport(215,608);
-        label(tab_==2?"Your library":tab_==3?"Up next":tab_==4?artistAnchor_.artist:tab_==5?(albumAnchor_.album.empty()?"Album":albumAnchor_.album):tab_==0?"For you":heading_,440,106,36,ink,600);
+        label(tab_==2?"Your library":tab_==3?"Queue":tab_==4?artistAnchor_.artist:tab_==5?(albumAnchor_.album.empty()?"Album":albumAnchor_.album):tab_==0?"For you":heading_,440,106,36,ink,600);
         button({1050,104,190,54},tab_==1?"Search":tab_==2?"Search songs":tab_==3?"Discover":"Refresh",[this]{if(tab_==1||tab_==2)search();else if(tab_==5)fetch(4);else if(tab_==4)fetch(3);else if(tab_==0)fetch(0);else changeTab(0);});
         label(tab_==0?(library_.empty()?"YouTube Music discovery / save songs to tune this feed":"Recommendations based on your saved songs"):tab_==1?"Songs and artists":tab_==2?"Press - to save the playing song":tab_==4?"Songs from this artist's YouTube Music page":tab_==5?"Tracks from this album":"Songs play in this order",440,158,18,muted,790);
         auto& rows=visible();listScroll_.offset=std::clamp(listScroll_.offset,0.f,std::max(0.f,float(rows.size()*72)-390));
@@ -266,15 +289,15 @@ public:
         if(start!=artworkStart_||tab_!=artworkTab_||SDL_GetTicks()-artworkRetry_>5000){artworkRetry_=SDL_GetTicks();artworkStart_=start;artworkTab_=tab_;std::vector<Song> shown;if(!current_.id.empty())shown.push_back(current_);for(int i=start;i<int(rows.size())&&i<start+7;i++)shown.push_back(rows[i]);artwork(shown);}
         for(int i=start;i<int(rows.size())&&i<start+7;i++){
             int y=199+i*72-int(listScroll_.offset);SDL_Rect bounds{440,y,800,66};round(bounds,14,i==selected_?surface:paper);
-            if(i==selected_){color(accent);SDL_RenderDrawRect(renderer_,&bounds);}
+            if(i==selected_){color(accent);SDL_RenderDrawRect(renderer_,&bounds);}if(tab_==3&&rows[i].id==current_.id){rect({1003,y+25,2,14},ink);rect({1007,y+20,2,24},ink);rect({1011,y+28,2,8},ink);}
             cover(rows[i],{450,y+8,50,50});songTitle(rows[i].title,515,y+6,22,480);label(rows[i].artist,515,y+37,18,muted,420);label(rows[i].duration,947,y+37,18,muted,65);
             auto song=rows[i];button({1020,y+9,100,48},"Artist",[this,song]{openArtist(song);},false,18);button({1130,y+9,105,48},"Album",[this,song]{openAlbum(song);},false,18);
             hits_.push_back({bounds,[this,i]{selected_=i;choose(i);}});
         }
         for(size_t i=firstHit;i<hits_.size();i++){SDL_Rect clipped{};SDL_IntersectRect(&hits_[i].rect,&clip,&clipped);hits_[i].rect=clipped;}
         SDL_RenderSetClipRect(renderer_,nullptr);if(rows.size()*72>390){int height=std::max(20,390*390/int(rows.size()*72));rect({1248,199+int((390-height)*listScroll_.offset/(rows.size()*72-390)),3,height},muted);}
-        if(rows.empty())label(loading_?"Loading songs from YouTube Music...":tab_==2?"Your library is empty. Play a song, then press -.":tab_==3?"Choose a song to start an audio queue.":"Press X to search or tap Refresh.",450,255,22,muted,760);
-        std::string message=loading_?"Loading YouTube Music...":notice_.empty()?player_->status():notice_;if(message!="Playing audio only")label(message,440,598,18,muted,780);label("Tap cover: Fullscreen   - Save   + Screen off",440,627,18,muted,800);
+        if(rows.empty())label(loading_?"Loading songs from YouTube Music...":tab_==2?"Your library is empty. Play a song, then press -.":tab_==3?"Choose a song to start a queue.":"Press X to search or tap Refresh.",450,255,22,muted,760);
+        std::string message=loading_?"Loading YouTube Music...":notice_.empty()?player_->status():notice_;if(message!="Playing audio only")label(message,440,598,18,muted,780);label("Tap cover: Fullscreen   Y Play next   - Save   + Screen off",440,627,18,muted,800);
         for(int i=0;i<6;i++){SDL_Rect r{440+i*133,662,125,46};round(r,16,i==tab_?ink:surface);centeredLabel(tabNames[i],r,22,i==tab_?paper:ink);hits_.push_back({r,[this,i]{changeTab(i);}});}
         SDL_RenderPresent(renderer_);
     }
@@ -302,9 +325,9 @@ public:
             if(event.type==SDL_MOUSEMOTION||event.type==SDL_FINGERMOTION){if(!pointerActive_)continue;if(event.type==SDL_FINGERMOTION&&event.tfinger.fingerId!=pointerFinger_)continue;pointerX_=event.type==SDL_FINGERMOTION?int(event.tfinger.x*1280):event.motion.x;pointerY_=event.type==SDL_FINGERMOTION?int(event.tfinger.y*720):event.motion.y;if(pointerOnList_)listScroll_.move(pointerY_,std::max(0.f,float(visible().size()*72)-390));if(pointerOnLyrics_)lyricScroll_.move(pointerY_,lyricScrollMax_);}
             if(event.type==SDL_MOUSEBUTTONUP||event.type==SDL_FINGERUP){if(wakeTouch_){wakeTouch_=false;continue;}if(!pointerActive_)continue;if(event.type==SDL_FINGERUP&&event.tfinger.fingerId!=pointerFinger_)continue;pointerX_=event.type==SDL_FINGERUP?int(event.tfinger.x*1280):event.button.x;pointerY_=event.type==SDL_FINGERUP?int(event.tfinger.y*720):event.button.y;bool tap=true;if(pointerOnList_){listScroll_.move(pointerY_,std::max(0.f,float(visible().size()*72)-390));tap=listScroll_.end();}if(pointerOnLyrics_){lyricScroll_.move(pointerY_,lyricScrollMax_);tap=lyricScroll_.end();}pointerActive_=false;if(tap)for(auto& hit:hits_)if(pointerX_>=hit.rect.x&&pointerX_<hit.rect.x+hit.rect.w&&pointerY_>=hit.rect.y&&pointerY_<hit.rect.y+hit.rect.h){auto action=hit.action;action();break;}}
             if(event.type==SDL_MOUSEWHEEL&&!fullscreen_)listScroll_.offset=std::clamp(listScroll_.offset-event.wheel.y*48.f,0.f,std::max(0.f,float(visible().size()*72)-390));
-            if(event.type==SDL_KEYDOWN){switch(event.key.keysym.sym){case SDLK_RETURN:action(0);break;case SDLK_ESCAPE:action(12);break;case SDLK_UP:action(4);break;case SDLK_DOWN:action(5);break;case SDLK_x:action(2);break;case SDLK_SPACE:action(3);break;case SDLK_LEFT:action(6);break;case SDLK_RIGHT:action(7);break;}}
+            if(event.type==SDL_KEYDOWN){switch(event.key.keysym.sym){case SDLK_RETURN:action(0);break;case SDLK_ESCAPE:action(12);break;case SDLK_UP:action(4);break;case SDLK_DOWN:action(5);break;case SDLK_x:action(2);break;case SDLK_SPACE:togglePlayback();break;case SDLK_y:action(3);break;case SDLK_LEFT:action(6);break;case SDLK_RIGHT:action(7);break;}}
         }
-        applyPending();if(player_->ended())next(1);
+        applyPending();if(player_->ended())next(1,true);
 #ifdef __SWITCH__
         appletSetMediaPlaybackState(player_->active());
 #endif

@@ -16,7 +16,7 @@ EchoNX is a native homebrew music player for Switch consoles running custom firm
 - **Fullscreen player:** blurred artwork background, scrolling titles, and touch playback controls.
 - **Lyrics:** animated synced lyrics, plus touch scrolling for lyrics without timestamps.
 - **Touch and controller navigation:** swipe lists, or select songs with directional buttons and either analog stick.
-- **Playback controls:** queue, pause, previous/next, and tap-to-seek.
+- **Playback controls:** queue, pause, previous/next, tap-to-seek, shuffle, and repeat (off, all, or one).
 - **Backlight off:** keep listening with the screen dark while EchoNX stays open.
 - **Audio output indicator:** see whether audio is routed to speakers, a headset, or another output.
 
@@ -55,7 +55,7 @@ Your saved library lives at `sd:/switch/echonx/library.json`.
 | A | Play the selected song; in fullscreen, play/pause |
 | B | Leave fullscreen or return to Home |
 | X | Search for a song or artist |
-| Y | Play/pause |
+| Y | Queue the selected song to play next (song lists) |
 | Up/down or either analog stick | Move the song selection |
 | L / R | Switch tabs |
 | ZL / ZR | Previous / next song |
