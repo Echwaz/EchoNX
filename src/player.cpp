@@ -1,4 +1,5 @@
 #include "player.hpp"
+#include "worker_affinity.hpp"
 #include <stdexcept>
 #include <cstring>
 #include <cmath>
@@ -55,6 +56,7 @@ void Player::play(const Song& song){stop();abort_=false;paused_=false;done_=fals
 void Player::toggle(){if(!active_)return;paused_=!paused_.load();SDL_PauseAudioDevice(device_,paused_?1:0);}
 void Player::seek(double s){if(active_ && duration_>0)seek_=std::max(0.0,std::min(s,duration_.load()-0.1));}
 void Player::decode(const Song& song){
+    prefer_cpu(2);
     try{
         RangeReader reader{api_.resolve(song.id,&abort_),&abort_};Media m;
         auto* buffer=static_cast<uint8_t*>(av_malloc(32768));if(!buffer)throw std::bad_alloc();

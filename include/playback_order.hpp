@@ -31,6 +31,11 @@ public:
         return result;
     }
     bool select(int index){auto it=std::find(order_.begin(),order_.end(),index);if(it==order_.end())return false;position_=int(it-order_.begin());return true;}
+    std::vector<int> artworkNeighbors()const{
+        std::vector<int> result;if(order_.empty())return result;result.push_back(order_[position_]);
+        auto add=[&](int pos){if(repeat==1)pos=(pos%size()+size())%size();if(pos>=0&&pos<size()&&std::find(result.begin(),result.end(),order_[pos])==result.end())result.push_back(order_[pos]);};
+        add(position_+1);add(position_+2);add(position_-1);return result;
+    }
     const std::vector<int>& displayOrder()const{return order_;}
     int size()const{return int(order_.size());}
     int step(int direction,bool automatic=false){

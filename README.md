@@ -68,6 +68,14 @@ Your saved library lives at `sd:/switch/echonx/library.json`.
 
 After turning off the backlight, press a button or touch the screen to bring it back.
 
+## Persistent cache
+
+Artwork, lyrics, search results, artist and album metadata, and recommendation data are cached under `sd:/switch/echonx/cache/` and reused after restarting the app. The disk cache is limited to 100 MB and removes the least recently accessed files when full.
+
+Artwork is kept for 30 days, lyrics and artist/album metadata for 7 days, and search/recommendation data for 24 hours. Refresh bypasses the metadata cache.
+
+Audio data and temporary streaming URLs are not stored in this cache. Playback still requires an internet connection.
+
 ## Building from source
 
 EchoNX uses C++, libnx, SDL2, SDL2_ttf, SDL2_image, FFmpeg, curl, and mbedTLS. The included build script runs in Docker using `devkitpro/devkita64`.

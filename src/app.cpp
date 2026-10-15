@@ -5,6 +5,10 @@
 #include "visuals.hpp"
 #include "playback_order.hpp"
 #include "queue_actions.hpp"
+#include "disk_cache.hpp"
+#include "artwork_cache.hpp"
+#include "artwork_plan.hpp"
+#include "worker_affinity.hpp"
 #include "playback_icons.hpp"
 #include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL_image.h>
@@ -33,16 +37,16 @@ std::string clockText(double sec){int t=std::max(0,int(sec));return std::to_stri
 struct Hit {SDL_Rect rect;std::function<void()> action;};
 class App {
     SDL_Window* window_=nullptr;SDL_Renderer* renderer_=nullptr;std::map<int,TTF_Font*> fonts_;
-    std::map<std::string,SDL_Texture*> textures_,backgrounds_;std::vector<Hit> hits_;std::vector<Song> upcomingRows_;std::vector<int> upcomingIndices_;
+    std::map<std::string,SDL_Texture*> textures_,backgrounds_,thumbnails_;std::map<std::string,Uint32> thumbnailUse_;std::vector<Hit> hits_;std::vector<Song> upcomingRows_;std::vector<int> upcomingIndices_;
     std::map<std::string,SDL_Texture*> shapeTextures_;
     struct TitleTexture{SDL_Texture* texture;int width,height;Uint32 started;};std::map<std::string,TitleTexture> titleTextures_;
     std::string lyricAnimationSong_;int lyricTarget_=-2;double lyricVisual_=0,lyricFrom_=0;Uint32 lyricAnimationStart_=0;std::map<std::string,int> lyricHeights_;Song pendingMetadata_;
-    PlaybackOrder playbackOrder_{unsigned(SDL_GetPerformanceCounter())};Api api_;std::unique_ptr<Player> player_;std::thread fetch_,art_,lyricsWorker_;
+    PlaybackOrder playbackOrder_{unsigned(SDL_GetPerformanceCounter())};Api api_,audioApi_;std::unique_ptr<Player> player_;std::thread fetch_,art_,artCacheWorker_,lyricsWorker_;
     std::atomic<bool> closing_{false},loading_{false};std::mutex dataMutex_;
-    std::vector<Song> results_,searchRows_,artistRows_,albumRows_,relatedRows_,pending_,library_,queue_,artRequests_;std::map<std::string,std::string> artPending_;
+    std::vector<Song> results_,searchRows_,artistRows_,albumRows_,relatedRows_,pending_,library_,queue_,artRequests_;struct PreparedArt{std::shared_ptr<SDL_Surface> image,background,thumbnail;};std::map<std::string,PreparedArt> artPending_;std::mutex imageDecodeMutex_;std::string artFocus_;std::set<std::string> fullArtWanted_;
     std::condition_variable lyricsCv_;Song lyricsRequest_;bool lyricsRequested_=false;std::map<std::string,Lyrics> lyricCache_,lyricPending_;
     TouchScroll listScroll_,lyricScroll_;float lyricScrollMax_=0;std::string lyricScrollSong_;bool fullscreen_=false,pointerActive_=false,pointerOnList_=false,pointerOnLyrics_=false,wakeTouch_=false;int pointerY_=0;SDL_FingerID pointerFinger_=0;
-    std::condition_variable artCv_;bool pendingReady_=false;int pendingMode_=0,deferredMode_=-1;std::string deferredValue_;
+    std::condition_variable artCacheCv_;std::vector<Song> artCacheRequests_;std::string artInFlight_;std::condition_variable artCv_;bool pendingReady_=false;int pendingMode_=0,deferredMode_=-1;std::string deferredValue_;bool deferredFresh_=false;
     std::string notice_,pendingNotice_,heading_="Discover",query_;int tab_=0,selected_=0,queueIndex_=-1;
     Song current_,artistAnchor_,albumAnchor_;bool running_=true,screenOff_=false,focusHooked_=false;int pointerX_=0;size_t homeOffset_=0;std::string pendingArtistKey_;int artworkStart_=-1,artworkTab_=-1;
 #ifdef __SWITCH__
@@ -87,7 +91,7 @@ class App {
         if(it!=shapeTextures_.end()){SDL_Rect dest{r.x+4,r.y+6,36,36};SDL_RenderCopy(renderer_,it->second,nullptr,&dest);}
         if(!shuffle&&playbackOrder_.repeat==2)centeredLabel("1",{r.x+10,r.y+12,24,24},12,fg);
         if(enabled)round({r.x+20,r.y+44,4,4},2,ink);
-        hits_.push_back({r,[this,shuffle]{if(shuffle){playbackOrder_.shuffle=!playbackOrder_.shuffle;playbackOrder_.reset(int(queue_.size()),queueIndex_);notice_=playbackOrder_.shuffle?"Shuffle on":"Shuffle off";}else{playbackOrder_.repeat=(playbackOrder_.repeat+1)%3;notice_=playbackOrder_.repeat==0?"Repeat off":playbackOrder_.repeat==1?"Repeat all":"Repeat one";}}});
+        hits_.push_back({r,[this,shuffle]{if(shuffle){playbackOrder_.shuffle=!playbackOrder_.shuffle;playbackOrder_.reset(int(queue_.size()),queueIndex_);notice_=playbackOrder_.shuffle?"Shuffle on":"Shuffle off";}else{playbackOrder_.repeat=(playbackOrder_.repeat+1)%3;notice_=playbackOrder_.repeat==0?"Repeat off":playbackOrder_.repeat==1?"Repeat all":"Repeat one";}artwork({current_});}});
     }
     void transport(int center,int y){playbackMode({center-175,y+18,44,48},true);icon({center-117,y+16,52,52},0,[this]{next(-1);});icon({center-42,y,84,84},player_->active()&&!player_->paused()?2:1,[this]{togglePlayback();},true);icon({center+65,y+16,52,52},3,[this]{next(1);});playbackMode({center+131,y+18,44,48},false);}
     void focusPlayer(){if(current_.id.empty()){search();return;}fullscreen_=true;requestLyrics(current_,true);}
@@ -98,20 +102,20 @@ class App {
         {std::lock_guard<std::mutex> lock(dataMutex_);lyricsRequest_=song;lyricsRequested_=true;}lyricsCv_.notify_one();
 #endif
     }
-    void cover(const Song& s,SDL_Rect r){auto it=textures_.find(s.id);if(it!=textures_.end())SDL_RenderCopy(renderer_,it->second,nullptr,&r);else{round(r,16,surface);if(r.w>100)label(s.title.empty()?"Music":s.title,r.x+20,r.y+r.h/2-16,28,muted,r.w-40);}}
+    void cover(const Song& s,SDL_Rect r){auto& images=r.w>100?textures_:thumbnails_;auto it=images.find(s.id);if(it!=images.end()){SDL_RenderCopy(renderer_,it->second,nullptr,&r);if(r.w<=100)thumbnailUse_[s.id]=SDL_GetTicks();}else{round(r,16,surface);if(r.w>100)label(s.title.empty()?"Music":s.title,r.x+20,r.y+r.h/2-16,28,muted,r.w-40);}}
     std::vector<Song>& visible(){if(tab_==3){upcomingIndices_=playbackOrder_.displayOrder();upcomingRows_.clear();for(int i:upcomingIndices_)if(i>=0&&i<int(queue_.size()))upcomingRows_.push_back(queue_[i]);selected_=std::clamp(selected_,0,std::max(0,int(upcomingRows_.size())-1));return upcomingRows_;}return tab_==2?library_:tab_==4?artistRows_:tab_==5?albumRows_:tab_==1?searchRows_:results_;}
     void saveLibrary(){save_library(libraryPath_,library_);}
     void favorite(){if(current_.id.empty()){notice_="Choose a song before saving it to your library.";return;}auto previous=library_;auto it=std::find_if(library_.begin(),library_.end(),[&](const Song& s){return s.id==current_.id;});if(it==library_.end())library_.push_back(current_);else library_.erase(it);try{saveLibrary();homeOffset_=0;notice_="Library updated";}catch(const std::exception& e){library_=std::move(previous);notice_=e.what();}}
     static std::string pageKey(int mode,const Song& song){return mode==4?song.albumId+"|"+song.id:song.artistId+"|"+song.artist;}
-    void fetch(int mode,const std::string& value=""){
-        if(loading_){deferredMode_=mode;deferredValue_=value;return;}
+    void fetch(int mode,const std::string& value="",bool fresh=false){
+        if(loading_){deferredMode_=mode;deferredValue_=value;deferredFresh_=fresh;return;}
         if(fetch_.joinable())fetch_.join();loading_=true;auto saved=library_;auto anchor=mode==4?albumAnchor_:artistAnchor_;auto playing=current_;size_t offset=homeOffset_;if(mode==0)homeOffset_++;
 #ifdef ECHO_PREVIEW
         const char* path=mode==4?"tests/album.json":mode==3?"tests/artist-songs.json":mode==2?"tests/related.json":mode==1?"tests/search.json":"tests/home.json";
         std::ifstream f(path);Json j;f>>j;pending_=songs(j,mode>=3?120:40);if(mode==0&&!saved.empty()){std::ifstream r("tests/related.json");Json related;r>>related;pending_=rank_recommendations(saved,{songs(related)});}pendingNotice_="";pendingArtistKey_=pageKey(mode,anchor);pendingMode_=mode;pendingReady_=true;loading_=false;
 #else
-        fetch_=std::thread([this,mode,value,saved,anchor,offset,playing]{
-            try{auto rows=mode==4?api_.album(anchor):mode==3?api_.artist(anchor):mode==2?api_.related(value):mode==1?api_.search(value):api_.for_saved(saved,offset);
+        fetch_=std::thread([this,mode,value,saved,anchor,offset,playing,fresh]{prefer_cpu(0);
+            try{auto rows=mode==4?api_.album(anchor,fresh):mode==3?api_.artist(anchor,fresh):mode==2?api_.related(value,fresh):mode==1?api_.search(value,fresh):api_.for_saved(saved,offset,fresh);
                 Song metadata;
                 if(mode==2){for(const auto& s:rows)if(s.id==value)metadata=s;
                     if(playing.id==value&&playing.album.empty()&&metadata.album.empty())try{for(const auto& s:api_.search(playing.title+" "+playing.artist))if(s.id==value){metadata=s;break;}}catch(...){}
@@ -122,11 +126,19 @@ class App {
         });
 #endif
     }
+    void prepareArtwork(const Song& song,const std::string& bytes){
+        bool background=false;{std::lock_guard<std::mutex> lock(dataMutex_);background=fullArtWanted_.count(song.id)!=0;}
+        std::lock_guard<std::mutex> decoderLock(imageDecodeMutex_);
+        auto* rw=SDL_RWFromConstMem(bytes.data(),int(bytes.size()));auto* surface=IMG_Load_RW(rw,1);if(!surface)return;
+        PreparedArt ready;auto* thumbnail=SDL_CreateRGBSurfaceWithFormat(0,thumbnailSize,thumbnailSize,32,SDL_PIXELFORMAT_RGBA32);if(thumbnail){SDL_BlitScaled(surface,nullptr,thumbnail,nullptr);ready.thumbnail={thumbnail,SDL_FreeSurface};}if(background){ready.image={surface,SDL_FreeSurface};auto* blurred=album_blur_surface(surface,.25f);if(blurred)ready.background={blurred,SDL_FreeSurface};}else SDL_FreeSurface(surface);
+        std::lock_guard<std::mutex> lock(dataMutex_);if(!closing_){auto& pending=artPending_[song.id];if(ready.image||!pending.image)pending=std::move(ready);}
+    }
     void artwork(const std::vector<Song>& items){
+        std::vector<Song> requests;std::set<std::string> seen,wanted;auto add=[&](const Song& song,bool full){if(song.id.empty())return;if(full)wanted.insert(song.id);if(seen.insert(song.id).second)requests.push_back(song);};add(current_,true);for(int i:playbackOrder_.artworkNeighbors())if(i>=0&&i<int(queue_.size()))add(queue_[i],true);for(const auto& song:items)add(song,false);
 #ifdef ECHO_PREVIEW
-        for(const auto& s:items){std::ifstream f("tests/art/"+s.id+".img",std::ios::binary);if(f)artPending_[s.id]=std::string(std::istreambuf_iterator<char>(f),{});}
+        artFocus_=current_.id;fullArtWanted_=wanted;for(const auto& s:requests){std::ifstream f("tests/art/"+s.id+".img",std::ios::binary);if(f)prepareArtwork(s,std::string(std::istreambuf_iterator<char>(f),{}));}
 #else
-        {std::lock_guard<std::mutex> l(dataMutex_);artRequests_.clear();for(const auto& s:items)if(!textures_.count(s.id) && !s.cover.empty())artRequests_.push_back(s);}artCv_.notify_one();
+        {std::lock_guard<std::mutex> lock(dataMutex_);artFocus_=current_.id;fullArtWanted_=std::move(wanted);artCacheRequests_.clear();artRequests_.clear();for(const auto& s:requests){bool needsFull=fullArtWanted_.count(s.id)&&(!textures_.count(s.id)||!backgrounds_.count(s.id));auto pending=artPending_.find(s.id);bool pendingReady=pending!=artPending_.end()&&(!needsFull||bool(pending->second.image));if((!thumbnails_.count(s.id)||needsFull)&&!pendingReady)artCacheRequests_.push_back(s);}}artCacheCv_.notify_one();
 #endif
     }
     void applyPending(){
@@ -135,14 +147,20 @@ class App {
             if(pendingReady_){auto& target=pendingMode_==4?albumRows_:pendingMode_==3?artistRows_:pendingMode_==2?relatedRows_:pendingMode_==1?searchRows_:results_;const auto& anchor=pendingMode_==4?albumAnchor_:artistAnchor_;if((pendingMode_!=3&&pendingMode_!=4)||pendingArtistKey_==pageKey(pendingMode_,anchor)){target=std::move(pending_);if(pendingMode_!=2){selected_=0;listScroll_.reset();}update=true;items=target;if(!current_.id.empty())items.insert(items.begin(),current_);notice_=pendingNotice_;}pendingReady_=false;pendingNotice_.clear();}
             if(!pendingMetadata_.id.empty()){auto enrich=[&](Song& s){if(s.id!=pendingMetadata_.id)return;if(s.album.empty())s.album=pendingMetadata_.album;if(s.albumId.empty())s.albumId=pendingMetadata_.albumId;};enrich(current_);for(auto& s:queue_)enrich(s);for(auto& s:artistRows_)enrich(s);pendingMetadata_={};}
             for(auto& [id,lyrics]:lyricPending_)lyricCache_[id]=std::move(lyrics);lyricPending_.clear();
-            for(auto& [id,bytes]:artPending_){if(textures_.count(id))continue;SDL_RWops* rw=SDL_RWFromConstMem(bytes.data(),int(bytes.size()));SDL_Surface* s=IMG_Load_RW(rw,1);if(s){auto* texture=SDL_CreateTextureFromSurface(renderer_,s);if(texture){textures_[id]=texture;backgrounds_[id]=album_blur(renderer_,s,.25f);}SDL_FreeSurface(s);}}
-            artPending_.clear();
-            std::set<std::string> keep{current_.id};auto& shown=visible();int first=int(listScroll_.offset)/72;for(int i=first;i<int(shown.size())&&i<first+7;i++)keep.insert(shown[i].id);
-            while(textures_.size()>32){auto it=std::find_if(textures_.begin(),textures_.end(),[&](const auto& item){return !keep.count(item.first);});if(it==textures_.end())break;SDL_DestroyTexture(it->second);auto bg=backgrounds_.find(it->first);if(bg!=backgrounds_.end()){SDL_DestroyTexture(bg->second);backgrounds_.erase(bg);}textures_.erase(it);}
+            while(!artPending_.empty()){
+                auto item=artPending_.find(current_.id);if(item==artPending_.end()){auto& onscreen=visible();int first=int(listScroll_.offset)/72;for(int i=first;i<int(onscreen.size())&&i<first+artworkVisibleRows;i++){auto pending=artPending_.find(onscreen[i].id);if(pending!=artPending_.end()){item=pending;break;}}}if(item==artPending_.end())item=artPending_.begin();const auto& id=item->first;auto& ready=item->second;
+                bool uploaded=false;if(!thumbnails_.count(id)&&ready.thumbnail){auto* thumbnail=SDL_CreateTextureFromSurface(renderer_,ready.thumbnail.get());if(thumbnail){thumbnails_[id]=thumbnail;thumbnailUse_[id]=SDL_GetTicks();uploaded=true;}}
+                if(!textures_.count(id)&&ready.image){auto* texture=SDL_CreateTextureFromSurface(renderer_,ready.image.get());if(texture){textures_[id]=texture;uploaded=true;}}
+                if(!backgrounds_.count(id)&&ready.background){auto* background=SDL_CreateTextureFromSurface(renderer_,ready.background.get());if(background){backgrounds_[id]=background;uploaded=true;}}
+                artPending_.erase(item);if(uploaded)break;
+            }
+            std::set<std::string> keep{current_.id};auto& shown=visible();for(int i:artwork_plan(int(shown.size()),int(listScroll_.offset)/72))keep.insert(shown[i].id);
+            while(thumbnails_.size()>thumbnailLimit){auto victim=thumbnails_.end();for(auto it=thumbnails_.begin();it!=thumbnails_.end();++it)if(!keep.count(it->first)&&(victim==thumbnails_.end()||thumbnailUse_[it->first]<thumbnailUse_[victim->first]))victim=it;if(victim==thumbnails_.end())break;SDL_DestroyTexture(victim->second);thumbnailUse_.erase(victim->first);thumbnails_.erase(victim);}
+            while(textures_.size()>6){auto it=std::find_if(textures_.begin(),textures_.end(),[&](const auto& image){return !fullArtWanted_.count(image.first);});if(it==textures_.end())break;SDL_DestroyTexture(it->second);auto bg=backgrounds_.find(it->first);if(bg!=backgrounds_.end()){SDL_DestroyTexture(bg->second);backgrounds_.erase(bg);}textures_.erase(it);}
             while(lyricCache_.size()>32){auto it=lyricCache_.begin();if(it->first==current_.id)++it;if(it==lyricCache_.end())break;lyricCache_.erase(it);}if(lyricHeights_.size()>2048)lyricHeights_.clear();
         }
-        if(update){if(items.size()>12)items.resize(12);artwork(items);}
-        if(!loading_ && deferredMode_>=0){int mode=deferredMode_;auto value=deferredValue_;deferredMode_=-1;fetch(mode,value);}
+        if(update){artworkStart_=-1;artworkTab_=-1;std::vector<Song> prefetch;if(!current_.id.empty())prefetch.push_back(current_);auto& rows=visible();for(int i:artwork_plan(int(rows.size()),int(listScroll_.offset)/72))prefetch.push_back(rows[i]);artwork(prefetch);}
+        if(!loading_ && deferredMode_>=0){int mode=deferredMode_;auto value=deferredValue_;bool fresh=deferredFresh_;deferredMode_=-1;fetch(mode,value,fresh);}
     }
     void choose(int i){auto rows=visible();if(i<0||i>=int(rows.size()))return;
         if(tab_!=3){queue_.assign(rows.begin()+i,rows.end());queueIndex_=0;playbackOrder_.reset(int(queue_.size()),queueIndex_);}else{queueIndex_=upcomingIndices_[i];playbackOrder_.select(queueIndex_);selected_=i;}
@@ -153,7 +171,7 @@ class App {
         auto& rows=visible();if(selected_<0||selected_>=int(rows.size())){notice_="Select a song first.";return;}
         Song song=rows[selected_];if(current_.id.empty()||queue_.empty()){choose(selected_);return;}
         if(song.id==current_.id){notice_="This song is already playing.";return;}
-        if(enqueue_next(queue_,queueIndex_,song,playbackOrder_)){notice_="Playing next: "+song.title;if(tab_==3){selected_=0;listScroll_.reset();}}
+        if(enqueue_next(queue_,queueIndex_,song,playbackOrder_)){artwork({current_});notice_="Playing next: "+song.title;if(tab_==3){selected_=0;listScroll_.reset();}}
     }
     void next(int direction,bool automatic=false){
         if(queue_.empty()){notice_="Choose a song to start the queue.";return;}
@@ -165,7 +183,7 @@ class App {
     }
     void openArtist(Song song={}){if(song.id.empty()){auto& rows=visible();if(selected_<int(rows.size()))song=rows[selected_];else song=current_;}if(song.artist.empty()){notice_="Choose a song with an artist first.";return;}artistAnchor_=song;artistRows_.clear();fullscreen_=false;tab_=4;selected_=0;listScroll_.reset();fetch(3);}
     void openAlbum(Song song={}){if(song.id.empty()){auto& rows=visible();if(selected_<int(rows.size()))song=rows[selected_];else song=current_;}if(song.id.empty()){notice_="Choose a song first.";return;}albumAnchor_=song;albumRows_.clear();fullscreen_=false;tab_=5;selected_=0;listScroll_.reset();fetch(4);}
-    void changeTab(int t){int next=(t+6)%6;bool refreshHome=tab_==0&&next==0;if(tab_==0&&next!=0){homeScroll_=listScroll_.offset;homeSelection_=selected_;}if(next==4&&artistAnchor_.id.empty()){openArtist();return;}if(next==5&&albumAnchor_.id.empty()){openAlbum();return;}fullscreen_=false;tab_=next;selected_=0;listScroll_.reset();if(tab_==0){heading_="Discover";if(refreshHome)fetch(0);else{selected_=homeSelection_;listScroll_.offset=homeScroll_;}}if(tab_==1 && query_.empty())notice_="Press X or tap Search to enter a song or artist.";if(tab_==2)artwork(library_);}
+    void changeTab(int t){int next=(t+6)%6;bool refreshHome=tab_==0&&next==0;if(tab_==0&&next!=0){homeScroll_=listScroll_.offset;homeSelection_=selected_;}if(next==4&&artistAnchor_.id.empty()){openArtist();return;}if(next==5&&albumAnchor_.id.empty()){openAlbum();return;}fullscreen_=false;tab_=next;selected_=0;listScroll_.reset();if(tab_==0){heading_="Discover";if(refreshHome)fetch(0,"",true);else{selected_=homeSelection_;listScroll_.offset=homeScroll_;}}if(tab_==1 && query_.empty())notice_="Press X or tap Search to enter a song or artist.";if(tab_==2)artwork(library_);}
     void search(){
         std::string q;
 #ifdef __SWITCH__
@@ -197,7 +215,7 @@ class App {
         if(key==4||key==5){float top=selected_*72.f;if(top<listScroll_.offset)listScroll_.offset=top;if(top+66>listScroll_.offset+390)listScroll_.offset=top+66-390;}
     }
 public:
-    App(){
+    App(){prefer_cpu(0);
         SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS,"0");SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS,"0");
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"linear");
         if(SDL_Init(SDL_INIT_VIDEO|SDL_INIT_AUDIO|SDL_INIT_EVENTS)!=0)throw std::runtime_error(SDL_GetError());
@@ -214,10 +232,16 @@ public:
             const char* previewFont=std::getenv("ECHONX_FONT");fonts_[size]=TTF_OpenFont(previewFont?previewFont:"font.ttf",size);
 #endif
             if(!fonts_[size])throw std::runtime_error(TTF_GetError());}
-        player_=std::make_unique<Player>(api_);
+        player_=std::make_unique<Player>(audioApi_);
 #ifndef ECHO_PREVIEW
-        art_=std::thread([this]{while(!closing_){Song s;{std::unique_lock<std::mutex> l(dataMutex_);artCv_.wait(l,[this]{return closing_ || !artRequests_.empty();});if(closing_)break;s=artRequests_.front();artRequests_.erase(artRequests_.begin());}try{auto bytes=http(s.cover,"",{},&closing_,browserUA,2*1024*1024);std::lock_guard<std::mutex> l(dataMutex_);artPending_[s.id]=std::move(bytes);}catch(...) {}}});
-        lyricsWorker_=std::thread([this]{while(!closing_){Song song;{std::unique_lock<std::mutex> lock(dataMutex_);lyricsCv_.wait(lock,[this]{return closing_||lyricsRequested_;});if(closing_)break;song=lyricsRequest_;lyricsRequested_=false;}Lyrics lyrics;try{lyrics=api_.lyrics(song,&closing_);}catch(...){lyrics.status="Lyrics unavailable right now. Tap here to retry.";}std::lock_guard<std::mutex> lock(dataMutex_);lyricPending_[song.id]=std::move(lyrics);}});
+        artCacheWorker_=std::thread([this]{prefer_cpu(1);while(!closing_){Song song;{std::unique_lock<std::mutex> lock(dataMutex_);artCacheCv_.wait(lock,[this]{return closing_||!artCacheRequests_.empty();});if(closing_)break;song=artCacheRequests_.front();artCacheRequests_.erase(artCacheRequests_.begin());}
+            auto bytes=cached_artwork(disk_cache(),song);if(bytes){prepareArtwork(song,*bytes);}else{{std::lock_guard<std::mutex> lock(dataMutex_);if(closing_)break;if(!song.cover.empty()&&artInFlight_!=song.id&&!artPending_.count(song.id)&&std::none_of(artRequests_.begin(),artRequests_.end(),[&](const Song& queued){return queued.id==song.id;})){if(artRequests_.size()>=64)artRequests_.pop_back();artRequests_.push_back(song);}}artCv_.notify_one();}
+        }});
+        art_=std::thread([this]{prefer_cpu(1);while(!closing_){Song song;{std::unique_lock<std::mutex> lock(dataMutex_);artCv_.wait(lock,[this]{return closing_||!artRequests_.empty();});if(closing_)break;song=artRequests_.front();artRequests_.erase(artRequests_.begin());artInFlight_=song.id;}
+            try{auto bytes=http(song.cover,"",{},&closing_,browserUA,2*1024*1024);if(song.cover.find("googleusercontent.com/")==std::string::npos&&song.cover.find("ytimg.com/")==std::string::npos)disk_cache().put("get-v1|"+song.cover,bytes);disk_cache().put("art-ref|"+song.id,song.cover);prepareArtwork(song,bytes);}catch(...){}
+            {std::lock_guard<std::mutex> lock(dataMutex_);artInFlight_.clear();}
+        }});
+        lyricsWorker_=std::thread([this]{prefer_cpu(0);while(!closing_){Song song;{std::unique_lock<std::mutex> lock(dataMutex_);lyricsCv_.wait(lock,[this]{return closing_||lyricsRequested_;});if(closing_)break;song=lyricsRequest_;lyricsRequested_=false;}Lyrics lyrics;try{lyrics=api_.lyrics(song,&closing_);}catch(...){lyrics.status="Lyrics unavailable right now. Tap here to retry.";}std::lock_guard<std::mutex> lock(dataMutex_);lyricPending_[song.id]=std::move(lyrics);}});
 #endif
 #ifdef __SWITCH__
         libraryPath_="sdmc:/switch/echonx/library.json";padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad_);
@@ -228,11 +252,11 @@ public:
         library_=load_library(libraryPath_);
         fetch(0);
     }
-    ~App(){closing_=true;artCv_.notify_one();lyricsCv_.notify_one();wake();player_.reset();if(fetch_.joinable())fetch_.join();if(art_.joinable())art_.join();if(lyricsWorker_.joinable())lyricsWorker_.join();
+    ~App(){closing_=true;artCacheCv_.notify_one();artCv_.notify_one();lyricsCv_.notify_one();wake();player_.reset();if(fetch_.joinable())fetch_.join();if(artCacheWorker_.joinable())artCacheWorker_.join();if(art_.joinable())art_.join();if(lyricsWorker_.joinable())lyricsWorker_.join();
 #ifdef __SWITCH__
         if(focusHooked_)appletUnhook(&hook_);appletSetMediaPlaybackState(false);if(audioControlReady_)audctlExit();
 #endif
-        for(auto& p:shapeTextures_)SDL_DestroyTexture(p.second);for(auto& p:titleTextures_)SDL_DestroyTexture(p.second.texture);for(auto& p:textures_)SDL_DestroyTexture(p.second);for(auto& p:backgrounds_)SDL_DestroyTexture(p.second);for(auto& p:fonts_)TTF_CloseFont(p.second);SDL_DestroyRenderer(renderer_);SDL_DestroyWindow(window_);IMG_Quit();TTF_Quit();SDL_Quit();}
+        for(auto& p:thumbnails_)SDL_DestroyTexture(p.second);for(auto& p:shapeTextures_)SDL_DestroyTexture(p.second);for(auto& p:titleTextures_)SDL_DestroyTexture(p.second.texture);for(auto& p:textures_)SDL_DestroyTexture(p.second);for(auto& p:backgrounds_)SDL_DestroyTexture(p.second);for(auto& p:fonts_)TTF_CloseFont(p.second);SDL_DestroyRenderer(renderer_);SDL_DestroyWindow(window_);IMG_Quit();TTF_Quit();SDL_Quit();}
     void timeline(int x,int y,int width){double duration=player_->duration(),position=player_->position();rect({x,y,width,5},surface);if(duration>0)rect({x,y,int(width*std::min(1.0,position/duration)),5},accent);hits_.push_back({{x,y-20,width,45},[this,duration,x,width]{player_->seek(duration*std::clamp((pointerX_-x)/double(width),0.0,1.0));}});label(clockText(position),x,y+16,18,muted);label(duration>0?clockText(duration):current_.duration,x+width-64,y+16,18,muted,64);}
     int lyricHeight(const std::string& value,int size,int width){auto key=std::to_string(size)+"|"+std::to_string(width)+"|"+value;auto found=lyricHeights_.find(key);if(found!=lyricHeights_.end())return found->second;auto* s=TTF_RenderUTF8_Blended_Wrapped(fonts_.at(size),value.c_str(),ink,width);int h=s?s->h:32;if(s)SDL_FreeSurface(s);lyricHeights_[key]=h;return h;}
     int lyricSize(const std::string& value){if(lyricHeight(value,28,580)<=120)return 28;if(lyricHeight(value,22,580)<=160)return 22;return 18;}
@@ -276,20 +300,20 @@ public:
         SDL_RenderSetClipRect(renderer_,nullptr);timeline(620,555,580);transport(910,600);
     }
     void draw(){
-        hits_.clear();rect({0,0,1280,720},paper);auto background=backgrounds_.find(current_.id);if(background!=backgrounds_.end()&&background->second){Uint8 tint=fullscreen_?255:194;SDL_SetTextureColorMod(background->second,tint,tint,tint);SDL_RenderCopy(renderer_,background->second,nullptr,nullptr);}audioIndicator();if(fullscreen_){if(!textures_.count(current_.id)&&SDL_GetTicks()-artworkRetry_>5000){artworkRetry_=SDL_GetTicks();artwork({current_});}drawFullscreen();SDL_RenderPresent(renderer_);return;}
+        hits_.clear();rect({0,0,1280,720},paper);auto background=backgrounds_.find(current_.id);if(background!=backgrounds_.end()&&background->second){Uint8 tint=fullscreen_?255:194;SDL_SetTextureColorMod(background->second,tint,tint,tint);SDL_RenderCopy(renderer_,background->second,nullptr,nullptr);}audioIndicator();if(fullscreen_){if((!textures_.count(current_.id)||!backgrounds_.count(current_.id))&&SDL_GetTicks()-artworkRetry_>5000){artworkRetry_=SDL_GetTicks();artwork({current_});}drawFullscreen();SDL_RenderPresent(renderer_);return;}
         label("EchoNX",40,24,36,ink);label("YouTube Music",205,36,18,muted);
         cover(current_,{40,105,350,350});hits_.push_back({{40,105,350,350},[this]{focusPlayer();}});
         songTitle(current_.id.empty()?"Your next listen":current_.title,40,474,28,350);label(current_.id.empty()?"Pick a song on the right":current_.artist,40,512,22,muted,350);
         timeline(40,558,350);transport(215,608);
         label(tab_==2?"Your library":tab_==3?"Queue":tab_==4?artistAnchor_.artist:tab_==5?(albumAnchor_.album.empty()?"Album":albumAnchor_.album):tab_==0?"For you":heading_,440,106,36,ink,600);
-        button({1050,104,190,54},tab_==1?"Search":tab_==2?"Search songs":tab_==3?"Discover":"Refresh",[this]{if(tab_==1||tab_==2)search();else if(tab_==5)fetch(4);else if(tab_==4)fetch(3);else if(tab_==0)fetch(0);else changeTab(0);});
+        button({1050,104,190,54},tab_==1?"Search":tab_==2?"Search songs":tab_==3?"Discover":"Refresh",[this]{if(tab_==1||tab_==2)search();else if(tab_==5)fetch(4,"",true);else if(tab_==4)fetch(3,"",true);else if(tab_==0)fetch(0,"",true);else changeTab(0);});
         label(tab_==0?(library_.empty()?"YouTube Music discovery / save songs to tune this feed":"Recommendations based on your saved songs"):tab_==1?"Songs and artists":tab_==2?"Press - to save the playing song":tab_==4?"Songs from this artist's YouTube Music page":tab_==5?"Tracks from this album":"Songs play in this order",440,158,18,muted,790);
         auto& rows=visible();listScroll_.offset=std::clamp(listScroll_.offset,0.f,std::max(0.f,float(rows.size()*72)-390));
         SDL_Rect clip{440,199,800,390};SDL_RenderSetClipRect(renderer_,&clip);int start=int(listScroll_.offset)/72;size_t firstHit=hits_.size();
-        if(start!=artworkStart_||tab_!=artworkTab_||SDL_GetTicks()-artworkRetry_>5000){artworkRetry_=SDL_GetTicks();artworkStart_=start;artworkTab_=tab_;std::vector<Song> shown;if(!current_.id.empty())shown.push_back(current_);for(int i=start;i<int(rows.size())&&i<start+7;i++)shown.push_back(rows[i]);artwork(shown);}
+        if(start!=artworkStart_||tab_!=artworkTab_||SDL_GetTicks()-artworkRetry_>5000){artworkRetry_=SDL_GetTicks();artworkStart_=start;artworkTab_=tab_;std::vector<Song> shown;if(!current_.id.empty())shown.push_back(current_);for(int i:artwork_plan(int(rows.size()),start))shown.push_back(rows[i]);artwork(shown);}
         for(int i=start;i<int(rows.size())&&i<start+7;i++){
             int y=199+i*72-int(listScroll_.offset);SDL_Rect bounds{440,y,800,66};round(bounds,14,i==selected_?surface:paper);
-            if(i==selected_){color(accent);SDL_RenderDrawRect(renderer_,&bounds);}if(tab_==3&&rows[i].id==current_.id){rect({1003,y+25,2,14},ink);rect({1007,y+20,2,24},ink);rect({1011,y+28,2,8},ink);}
+            if(i==selected_){color(accent);SDL_RenderDrawRect(renderer_,&bounds);}if(!current_.id.empty()&&rows[i].id==current_.id){rect({1003,y+25,2,14},ink);rect({1007,y+20,2,24},ink);rect({1011,y+28,2,8},ink);}
             cover(rows[i],{450,y+8,50,50});songTitle(rows[i].title,515,y+6,22,480);label(rows[i].artist,515,y+37,18,muted,420);label(rows[i].duration,947,y+37,18,muted,65);
             auto song=rows[i];button({1020,y+9,100,48},"Artist",[this,song]{openArtist(song);},false,18);button({1130,y+9,105,48},"Album",[this,song]{openAlbum(song);},false,18);
             hits_.push_back({bounds,[this,i]{selected_=i;choose(i);}});
@@ -306,7 +330,7 @@ public:
 #ifdef ECHO_PREVIEW
     void testPlainLyrics(){current_={"plain-test","Touchscreen lyric test","Test artist"};fullscreen_=true;Lyrics lyrics;for(int i=0;i<30;i++)lyrics.plain.push_back("Test lyric line "+std::to_string(i+1));lyricCache_[current_.id]=lyrics;draw();}
     void testFocusPlayer(){focusPlayer();}
-    void testArtworkCache(){for(int i=0;i<80;i++){std::string id="cache-test-"+std::to_string(i);textures_[id]=SDL_CreateTexture(renderer_,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_STATIC,8,8);}applyPending();if(textures_.size()>32)throw std::runtime_error("Artwork cache exceeded limit");}
+    void testArtworkCache(){for(int i=0;i<80;i++){std::string id="cache-test-"+std::to_string(i);textures_[id]=SDL_CreateTexture(renderer_,SDL_PIXELFORMAT_RGBA8888,SDL_TEXTUREACCESS_STATIC,8,8);}applyPending();if(textures_.size()>6)throw std::runtime_error("Artwork cache exceeded limit");}
     float testLyricScroll()const{return lyricScroll_.offset;}
     void testLongLyrics(){std::string longLine;for(int i=0;i<14;i++)longLine+="A longer lyric line for layout testing. ";lyricCache_[current_.id]={{{0,longLine},{5,"Short following line"}}, {},"Synthetic layout test"};lyricAnimationSong_.clear();draw();screenshot("../../outputs/EchoNX-long-lyrics-preview.png");}
     Json testState()const{return {{"song",current_.id},{"fullscreen",fullscreen_},{"tab",tab_},{"scroll",listScroll_.offset}};}

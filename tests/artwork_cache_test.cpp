@@ -1,0 +1,4 @@
+#include "artwork_cache.hpp"
+#include <cassert>
+#include <iostream>
+int main(){std::filesystem::path root="work/artwork-cache-test";echo::DiskCache cache(root);cache.clear();echo::Song a;a.id="track-a";a.cover="https://example/cover?v=1";cache.put("get-v1|"+a.cover,"artwork-bytes");assert(echo::cached_artwork(cache,a)=="artwork-bytes");cache.put("art-ref|"+a.id,a.cover);a.cover="https://example/cover?v=2";assert(echo::cached_artwork(cache,a)=="artwork-bytes");echo::Song b;b.id="other-track";b.cover="https://example/cover?v=1";assert(echo::cached_artwork(cache,b)=="artwork-bytes");b.cover="missing";assert(!echo::cached_artwork(cache,b));cache.clear();std::filesystem::remove(root);std::cout<<"PASS: direct disk artwork hits, changed-URL fallback, shared album cover reuse, cache misses.\n";}
