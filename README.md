@@ -44,9 +44,9 @@ Your saved library lives at `sd:/switch/echonx/library.json`.
 
 ## Screenshots
 
-| Main screen | Fullscreen player |
-| --- | --- |
-| ![EchoNX main screen](docs/main.jpg) | ![EchoNX fullscreen player](docs/fullscreen.jpg) |
+| Main screen | Fullscreen player | Album art mode |
+| --- | --- | --- |
+| ![EchoNX main screen](docs/main.jpg) | ![EchoNX fullscreen player](docs/fullscreen.jpg) | ![EchoNX album art mode](docs/album%20art.jpg) |
 
 ## Controls
 
