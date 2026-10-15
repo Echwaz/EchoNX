@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <algorithm>
 #include <vector>
 #include <unordered_set>
 #include <functional>
@@ -7,7 +8,7 @@
 
 namespace echo {
 using Json = nlohmann::json;
-struct Song { std::string id, title, artist, cover, duration, artistId, albumId, album; };
+struct Song { std::string id, title, artist, cover, duration, artistId, albumId, album; std::vector<std::string> artistNames; };
 inline std::string str(const Json& n, const char* path) {
     Json::json_pointer p(path);
     return n.contains(p) && n.at(p).is_string() ? n.at(p).get<std::string>() : "";
@@ -43,8 +44,7 @@ inline std::vector<Song> songs(const Json& root, size_t limit=40) {
             for(const char* path:{"/longBylineText/runs","/subtitle/runs","/flexColumns/1/musicResponsiveListItemFlexColumnRenderer/text/runs","/flexColumns/2/musicResponsiveListItemFlexColumnRenderer/text/runs"}) {
                 Json::json_pointer p(path);if(!r.contains(p)||!r.at(p).is_array())continue;
                 for(const auto& run:r.at(p)){auto id=str(run,"/navigationEndpoint/browseEndpoint/browseId");auto type=str(run,"/navigationEndpoint/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType");
-                    if(type=="MUSIC_PAGE_TYPE_ARTIST" && id.rfind("UC",0)==0){s.artistId=id;s.artist=str(run,"/text");break;}}
-                if(!s.artistId.empty())break;
+                    if((type=="MUSIC_PAGE_TYPE_ARTIST"||type.empty())&&id.rfind("UC",0)==0){auto name=str(run,"/text");if(name.empty())continue;if(s.artistId.empty()){s.artistId=id;s.artist=name;}if(std::find(s.artistNames.begin(),s.artistNames.end(),name)==s.artistNames.end())s.artistNames.push_back(name);}}
             }
             for(const char* path:{"/longBylineText/runs","/subtitle/runs","/flexColumns/1/musicResponsiveListItemFlexColumnRenderer/text/runs","/flexColumns/2/musicResponsiveListItemFlexColumnRenderer/text/runs"}) {
                 Json::json_pointer p(path);if(!r.contains(p)||!r.at(p).is_array())continue;
@@ -70,6 +70,7 @@ inline std::vector<Song> songs(const Json& root, size_t limit=40) {
     walk(root);return out;
 }
 inline void inherit_album_cover(std::vector<Song>& rows,const std::string& cover){for(auto& song:rows)if(song.cover.empty())song.cover=cover;}
-inline Json to_json(const Song& s) {return {{"id",s.id},{"title",s.title},{"artist",s.artist},{"cover",s.cover},{"duration",s.duration},{"artistId",s.artistId},{"albumId",s.albumId},{"album",s.album}};}
-inline Song from_json(const Json& j) {return {str(j,"/id"),str(j,"/title"),str(j,"/artist"),str(j,"/cover"),str(j,"/duration"),str(j,"/artistId"),str(j,"/albumId"),str(j,"/album")};}
+inline std::string display_artists(const Song& song){if(song.artistNames.empty())return song.artist;std::string result;for(const auto& name:song.artistNames){if(!result.empty())result+=" & ";result+=name;}return result;}
+inline Json to_json(const Song& s) {return {{"id",s.id},{"title",s.title},{"artist",s.artist},{"cover",s.cover},{"duration",s.duration},{"artistId",s.artistId},{"albumId",s.albumId},{"album",s.album},{"artists",s.artistNames}};}
+inline Song from_json(const Json& j) {Song song{str(j,"/id"),str(j,"/title"),str(j,"/artist"),str(j,"/cover"),str(j,"/duration"),str(j,"/artistId"),str(j,"/albumId"),str(j,"/album")};if(j.contains("artists")&&j["artists"].is_array())for(const auto& artist:j["artists"])if(artist.is_string()&&!artist.get<std::string>().empty())song.artistNames.push_back(artist.get<std::string>());return song;}
 }

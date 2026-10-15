@@ -14,7 +14,12 @@ template<class Inside> inline SDL_Surface* smooth_shape(int width,int height,SDL
     for(int y=0;y<height;y++)for(int x=0;x<width;x++){int coverage=0;for(int sy=0;sy<4;sy++)for(int sx=0;sx<4;sx++)coverage+=inside(x+(sx+.5)/4,y+(sy+.5)/4)?1:0;Uint32 pixel=SDL_MapRGBA(s->format,color.r,color.g,color.b,Uint8(color.a*coverage/16));std::memcpy(static_cast<Uint8*>(s->pixels)+y*s->pitch+x*4,&pixel,4);}return s;
 }
 inline Triangle skip_shape(int center,bool next){return {center+(next?-14:-12),26,13,next};}
-inline std::string lyric_display(const std::string& s){return s.find_first_not_of(" \t\r\n")==std::string::npos?"...":s;}
+inline std::string lyric_display(const std::string& value){
+    auto space=[](const std::string& text,size_t i)->size_t{unsigned char c=text[i];if(c==' '||c=='\t'||c=='\r')return 1;if(text.compare(i,2,"\xC2\xA0")==0)return 2;if(text.compare(i,3,"\xE3\x80\x80")==0)return 3;return 0;};
+    std::string result;bool content=false;size_t begin=0;
+    while(begin<=value.size()){size_t end=value.find('\n',begin);if(end==std::string::npos)end=value.size();std::string line=value.substr(begin,end-begin);size_t first=0,last=0;while(first<line.size()){size_t length=space(line,first);if(!length)break;first+=length;}for(size_t i=first;i<line.size();){size_t length=space(line,i);if(length)i+=length;else{last=++i;}}if(last>first){result+=line.substr(first,last-first);content=true;}if(end==value.size())break;result+='\n';begin=end+1;}
+    return content?result:"...";
+}
 inline double lyric_ease(double t){t=std::clamp(t,0.0,1.0);return 1-std::pow(1-t,3);}
 inline double title_scroll(double textWidth,double seconds){if(textWidth<=0)return 0;return std::fmod(std::max(0.0,seconds)*24.0,textWidth+64.0);}
 inline float analog_scroll_speed(int left,int right){int value=std::abs(left)>=std::abs(right)?left:right;float normalized=std::clamp(value/32767.f,-1.f,1.f);constexpr float dead=.22f;if(std::abs(normalized)<=dead)return 0;return -std::copysign((std::abs(normalized)-dead)/(1-dead)*480,normalized);}

@@ -64,7 +64,7 @@ Your saved library lives at `sd:/switch/echonx/library.json`.
 | Right stick click | Exit the app |
 | Left stick click | Open the artist page |
 
-**Touchscreen:** swipe the song list or plain lyrics, tap the progress bar to seek, and tap the cover to enter or leave fullscreen. In fullscreen, tap the artist or album name to open its page.
+**Touchscreen:** swipe the song list or plain lyrics, tap or drag the progress bar to seek, and tap the cover to enter or leave fullscreen. In fullscreen, tap the artist or album name to open its page.
 
 After turning off the backlight, press a button or touch the screen to bring it back.
 
