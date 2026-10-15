@@ -17,7 +17,7 @@ EchoNX is a native homebrew music player for Switch consoles running custom firm
 - **Lyrics:** animated synced lyrics, plus touch scrolling for lyrics without timestamps.
 - **Touch and controller navigation:** swipe lists, or select songs with directional buttons and either analog stick.
 - **Playback controls:** queue, pause, previous/next, tap-to-seek, shuffle, and repeat (off, all, or one).
-- **Backlight off:** keep listening with the screen dark while EchoNX stays open.
+- **Album art mode:** centered artwork with rounded corners, a soft shadow, and a solid background sampled from the cover. Press + to enter or leave; other app inputs are locked.
 - **Audio output indicator:** see whether audio is routed to speakers, a headset, or another output.
 
 ## What you need
@@ -38,7 +38,7 @@ Your saved library lives at `sd:/switch/echonx/library.json`.
 ## Good to know
 
 - **No Google sign-in:** recommendations use your locally saved songs, rather than your YouTube Music account history.
-- **Screen off means backlight off:** it is not Switch sleep mode. Playback stays inside EchoNX and does not run over other games.
+- **Playback stays inside EchoNX:** it does not run over other games.
 - **Lyrics and album details vary:** some songs have synced lyrics, some have plain lyrics, and others have none.
 - **Still in development:** service changes and network interruptions can affect playback. Artwork cache limits and streaming retries are implemented, but long-session stability still needs device testing.
 
@@ -60,13 +60,13 @@ Your saved library lives at `sd:/switch/echonx/library.json`.
 | L / R | Switch tabs |
 | ZL / ZR | Previous / next song |
 | − | Save or remove the current song from your library |
-| + | Turn off the backlight during active playback |
+| + | Enter or leave album art mode |
 | Right stick click | Exit the app |
 | Left stick click | Open the artist page |
 
 **Touchscreen:** swipe the song list or plain lyrics, tap or drag the progress bar to seek, and tap the cover to enter or leave fullscreen. In fullscreen, tap the artist or album name to open its page.
 
-After turning off the backlight, press a button or touch the screen to bring it back.
+In album art mode, touch and other app controls are ignored. Press **+** to return to the previous view. Artwork follows the playing song, including automatic track changes.
 
 ## Persistent cache
 

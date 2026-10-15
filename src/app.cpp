@@ -9,6 +9,7 @@
 #include "artwork_cache.hpp"
 #include "artwork_plan.hpp"
 #include "seek_bar.hpp"
+#include "album_art_mode.hpp"
 #include "worker_affinity.hpp"
 #include "playback_icons.hpp"
 #include <SDL2/SDL_ttf.h>
@@ -27,8 +28,8 @@
 #ifdef __SWITCH__
 #include <switch.h>
 #include <curl/curl.h>
-extern "C" void userAppInit(){socketInitializeDefault();nifmInitialize(NifmServiceType_User);romfsInit();plInitialize(PlServiceType_User);lblInitialize();}
-extern "C" void userAppExit(){lblSwitchBacklightOn(0);lblExit();plExit();romfsExit();nifmExit();socketExit();}
+extern "C" void userAppInit(){socketInitializeDefault();nifmInitialize(NifmServiceType_User);romfsInit();plInitialize(PlServiceType_User);}
+extern "C" void userAppExit(){plExit();romfsExit();nifmExit();socketExit();}
 #endif
 
 namespace echo {
@@ -39,19 +40,19 @@ struct Hit {SDL_Rect rect;std::function<void()> action;};
 class App {
     SDL_Window* window_=nullptr;SDL_Renderer* renderer_=nullptr;std::map<int,TTF_Font*> fonts_;
     std::map<std::string,SDL_Texture*> textures_,backgrounds_,thumbnails_;std::map<std::string,Uint32> thumbnailUse_;std::vector<Hit> hits_;std::vector<Song> upcomingRows_;std::vector<int> upcomingIndices_;
-    std::map<std::string,SDL_Texture*> shapeTextures_;
+    std::map<std::string,SDL_Texture*> shapeTextures_;SDL_Texture* artShadow_=nullptr;std::map<std::string,SDL_Color> artColors_;
     struct TitleTexture{SDL_Texture* texture;int width,height;Uint32 started;};std::map<std::string,TitleTexture> titleTextures_;
     std::string lyricAnimationSong_;int lyricTarget_=-2;double lyricVisual_=0,lyricFrom_=0;Uint32 lyricAnimationStart_=0;std::map<std::string,int> lyricHeights_;Song pendingMetadata_;
     PlaybackOrder playbackOrder_{unsigned(SDL_GetPerformanceCounter())};Api api_,audioApi_;std::unique_ptr<Player> player_;std::thread fetch_,art_,artCacheWorker_,lyricsWorker_;
     std::atomic<bool> closing_{false},loading_{false};std::mutex dataMutex_;
     std::vector<Song> results_,searchRows_,artistRows_,albumRows_,relatedRows_,pending_,library_,queue_,artRequests_;struct PreparedArt{std::shared_ptr<SDL_Surface> image,background,thumbnail;};std::map<std::string,PreparedArt> artPending_;std::mutex imageDecodeMutex_;std::string artFocus_;std::set<std::string> fullArtWanted_;
     std::condition_variable lyricsCv_;Song lyricsRequest_;bool lyricsRequested_=false;std::map<std::string,Lyrics> lyricCache_,lyricPending_;
-    SeekBarState seekBar_;bool pointerOnSeek_=false;TouchScroll listScroll_,lyricScroll_;float lyricScrollMax_=0;std::string lyricScrollSong_;bool fullscreen_=false,pointerActive_=false,pointerOnList_=false,pointerOnLyrics_=false,wakeTouch_=false;int pointerY_=0;SDL_FingerID pointerFinger_=0;
+    SeekBarState seekBar_;bool pointerOnSeek_=false;TouchScroll listScroll_,lyricScroll_;float lyricScrollMax_=0;std::string lyricScrollSong_;bool fullscreen_=false,pointerActive_=false,pointerOnList_=false,pointerOnLyrics_=false;int pointerY_=0;SDL_FingerID pointerFinger_=0;
     std::condition_variable artCacheCv_;std::vector<Song> artCacheRequests_;std::string artInFlight_;std::condition_variable artCv_;bool pendingReady_=false;int pendingMode_=0,deferredMode_=-1;std::string deferredValue_;bool deferredFresh_=false;
     std::string notice_,pendingNotice_,heading_="Discover",query_;int tab_=0,selected_=0,queueIndex_=-1;
-    Song current_,artistAnchor_,albumAnchor_;bool running_=true,screenOff_=false,focusHooked_=false;int pointerX_=0;size_t homeOffset_=0;std::string pendingArtistKey_;int artworkStart_=-1,artworkTab_=-1;
+    Song current_,artistAnchor_,albumAnchor_;bool running_=true,artOnly_=false;int pointerX_=0;size_t homeOffset_=0;std::string pendingArtistKey_;int artworkStart_=-1,artworkTab_=-1;
 #ifdef __SWITCH__
-    PadState pad_;AppletHookCookie hook_{};bool audioControlReady_=false;
+    PadState pad_;bool audioControlReady_=false;
 #endif
     Uint32 audioPoll_=0;std::string audioRoute_="Audio: --";
     Uint32 artworkRetry_=0,analogRepeat_=0;int analogDirection_=0;float homeScroll_=0;int homeSelection_=0;
@@ -151,13 +152,13 @@ class App {
             while(!artPending_.empty()){
                 auto item=artPending_.find(current_.id);if(item==artPending_.end()){auto& onscreen=visible();int first=int(listScroll_.offset)/72;for(int i=first;i<int(onscreen.size())&&i<first+artworkVisibleRows;i++){auto pending=artPending_.find(onscreen[i].id);if(pending!=artPending_.end()){item=pending;break;}}}if(item==artPending_.end())item=artPending_.begin();const auto& id=item->first;auto& ready=item->second;
                 bool uploaded=false;if(!thumbnails_.count(id)&&ready.thumbnail){auto* thumbnail=SDL_CreateTextureFromSurface(renderer_,ready.thumbnail.get());if(thumbnail){thumbnails_[id]=thumbnail;thumbnailUse_[id]=SDL_GetTicks();uploaded=true;}}
-                if(!textures_.count(id)&&ready.image){auto* texture=SDL_CreateTextureFromSurface(renderer_,ready.image.get());if(texture){textures_[id]=texture;uploaded=true;}}
+                if(!textures_.count(id)&&ready.image){auto* texture=SDL_CreateTextureFromSurface(renderer_,ready.image.get());if(texture){textures_[id]=texture;artColors_[id]=album_art_color(ready.thumbnail?ready.thumbnail.get():ready.image.get());uploaded=true;}}
                 if(!backgrounds_.count(id)&&ready.background){auto* background=SDL_CreateTextureFromSurface(renderer_,ready.background.get());if(background){backgrounds_[id]=background;uploaded=true;}}
                 artPending_.erase(item);if(uploaded)break;
             }
             std::set<std::string> keep{current_.id};auto& shown=visible();for(int i:artwork_plan(int(shown.size()),int(listScroll_.offset)/72))keep.insert(shown[i].id);
             while(thumbnails_.size()>thumbnailLimit){auto victim=thumbnails_.end();for(auto it=thumbnails_.begin();it!=thumbnails_.end();++it)if(!keep.count(it->first)&&(victim==thumbnails_.end()||thumbnailUse_[it->first]<thumbnailUse_[victim->first]))victim=it;if(victim==thumbnails_.end())break;SDL_DestroyTexture(victim->second);thumbnailUse_.erase(victim->first);thumbnails_.erase(victim);}
-            while(textures_.size()>6){auto it=std::find_if(textures_.begin(),textures_.end(),[&](const auto& image){return !fullArtWanted_.count(image.first);});if(it==textures_.end())break;SDL_DestroyTexture(it->second);auto bg=backgrounds_.find(it->first);if(bg!=backgrounds_.end()){SDL_DestroyTexture(bg->second);backgrounds_.erase(bg);}textures_.erase(it);}
+            while(textures_.size()>6){auto it=std::find_if(textures_.begin(),textures_.end(),[&](const auto& image){return !fullArtWanted_.count(image.first);});if(it==textures_.end())break;SDL_DestroyTexture(it->second);auto bg=backgrounds_.find(it->first);if(bg!=backgrounds_.end()){SDL_DestroyTexture(bg->second);backgrounds_.erase(bg);}artColors_.erase(it->first);textures_.erase(it);}
             while(lyricCache_.size()>32){auto it=lyricCache_.begin();if(it->first==current_.id)++it;if(it==lyricCache_.end())break;lyricCache_.erase(it);}if(lyricHeights_.size()>2048)lyricHeights_.clear();
         }
         if(update){artworkStart_=-1;artworkTab_=-1;std::vector<Song> prefetch;if(!current_.id.empty())prefetch.push_back(current_);auto& rows=visible();for(int i:artwork_plan(int(rows.size()),int(listScroll_.offset)/72))prefetch.push_back(rows[i]);artwork(prefetch);}
@@ -194,23 +195,18 @@ class App {
 #endif
         if(q.empty())return;query_=q;tab_=1;heading_="Search: "+q;selected_=0;fetch(1,q);
     }
-    void wake(){if(screenOff_){
-#ifdef __SWITCH__
-        if(R_FAILED(lblSwitchBacklightOn(0)))return;
-#endif
-        screenOff_=false;}}
-    void dark(){if(!player_->active() || player_->paused()){notice_="Start music before turning off the screen.";return;}
-#ifdef __SWITCH__
-        if(R_FAILED(appletSetMediaPlaybackState(true)) || R_FAILED(lblSwitchBacklightOff(0))){notice_="Screen off unavailable";return;}
-#endif
-        screenOff_=true;
+    void artMode(){
+        if(!artOnly_&&current_.id.empty()){notice_="Choose a song first.";return;}
+        artOnly_=!artOnly_;seekBar_.cancel();pointerActive_=pointerOnSeek_=pointerOnList_=pointerOnLyrics_=false;
+        listScroll_.end();lyricScroll_.end();analogDirection_=0;hits_.clear();
+        if(artOnly_)artwork({current_});
     }
-    void action(int key){if(screenOff_){wake();return;}
+    void action(int key){if(artOnly_){if(key==10)artMode();return;}
         auto& rows=visible();switch(key){
         case 0:if(fullscreen_)togglePlayback();else choose(selected_);break;case 1:if(fullscreen_)fullscreen_=false;else changeTab(0);break;case 2:fullscreen_=false;search();break;case 3:playNextSelected();break;
         case 4:if(selected_>0)--selected_;break;case 5:if(selected_+1<int(rows.size()))++selected_;break;
         case 6:changeTab(tab_-1);break;case 7:changeTab(tab_+1);break;case 8:next(-1);break;case 9:next(1);break;
-        case 10:dark();break;case 11:favorite();break;case 12:running_=false;break;
+        case 10:artMode();break;case 11:favorite();break;case 12:running_=false;break;
         case 13:openArtist();break;
         }
         if(key==4||key==5){float top=selected_*72.f;if(top<listScroll_.offset)listScroll_.offset=top;if(top+66>listScroll_.offset+390)listScroll_.offset=top+66-390;}
@@ -246,18 +242,17 @@ public:
 #endif
 #ifdef __SWITCH__
         libraryPath_="sdmc:/switch/echonx/library.json";padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad_);
-        appletHook(&hook_,[](AppletHookType hook,void* ctx){if(hook==AppletHookType_OnFocusState && appletGetFocusState()!=AppletFocusState_InFocus)static_cast<App*>(ctx)->wake();},this);focusHooked_=true;
 #else
         libraryPath_="tests/local-library.json";
 #endif
         library_=load_library(libraryPath_);
         fetch(0);
     }
-    ~App(){closing_=true;artCacheCv_.notify_one();artCv_.notify_one();lyricsCv_.notify_one();wake();player_.reset();if(fetch_.joinable())fetch_.join();if(artCacheWorker_.joinable())artCacheWorker_.join();if(art_.joinable())art_.join();if(lyricsWorker_.joinable())lyricsWorker_.join();
+    ~App(){closing_=true;artCacheCv_.notify_one();artCv_.notify_one();lyricsCv_.notify_one();player_.reset();if(fetch_.joinable())fetch_.join();if(artCacheWorker_.joinable())artCacheWorker_.join();if(art_.joinable())art_.join();if(lyricsWorker_.joinable())lyricsWorker_.join();
 #ifdef __SWITCH__
-        if(focusHooked_)appletUnhook(&hook_);appletSetMediaPlaybackState(false);if(audioControlReady_)audctlExit();
+        appletSetMediaPlaybackState(false);if(audioControlReady_)audctlExit();
 #endif
-        for(auto& p:thumbnails_)SDL_DestroyTexture(p.second);for(auto& p:shapeTextures_)SDL_DestroyTexture(p.second);for(auto& p:titleTextures_)SDL_DestroyTexture(p.second.texture);for(auto& p:textures_)SDL_DestroyTexture(p.second);for(auto& p:backgrounds_)SDL_DestroyTexture(p.second);for(auto& p:fonts_)TTF_CloseFont(p.second);SDL_DestroyRenderer(renderer_);SDL_DestroyWindow(window_);IMG_Quit();TTF_Quit();SDL_Quit();}
+        SDL_DestroyTexture(artShadow_);for(auto& p:thumbnails_)SDL_DestroyTexture(p.second);for(auto& p:shapeTextures_)SDL_DestroyTexture(p.second);for(auto& p:titleTextures_)SDL_DestroyTexture(p.second.texture);for(auto& p:textures_)SDL_DestroyTexture(p.second);for(auto& p:backgrounds_)SDL_DestroyTexture(p.second);for(auto& p:fonts_)TTF_CloseFont(p.second);SDL_DestroyRenderer(renderer_);SDL_DestroyWindow(window_);IMG_Quit();TTF_Quit();SDL_Quit();}
     void timeline(int x,int y,int width){
         double duration=player_->duration(),position=player_->position();Uint32 now=SDL_GetTicks();seekBar_.configure(x,y,width,current_.id,duration,position,now);double progress=seekBar_.advance(position,now),emphasis=seekBar_.emphasis();
         int height=8+int(std::lround(4*emphasis)),diameter=12+int(std::lround(14*emphasis));if(diameter%2)++diameter;int center=y+4,handle=x+int(std::lround(width*progress));SDL_Rect rail{x,center-height/2,width,height};round(rail,height/2,surface);
@@ -306,7 +301,14 @@ public:
         SDL_RenderSetClipRect(renderer_,nullptr);timeline(620,555,580);transport(910,600);
     }
     void draw(){
-        hits_.clear();rect({0,0,1280,720},paper);auto background=backgrounds_.find(current_.id);if(background!=backgrounds_.end()&&background->second){Uint8 tint=fullscreen_?255:194;SDL_SetTextureColorMod(background->second,tint,tint,tint);SDL_RenderCopy(renderer_,background->second,nullptr,nullptr);}audioIndicator();if(fullscreen_){if((!textures_.count(current_.id)||!backgrounds_.count(current_.id))&&SDL_GetTicks()-artworkRetry_>5000){artworkRetry_=SDL_GetTicks();artwork({current_});}drawFullscreen();SDL_RenderPresent(renderer_);return;}
+        hits_.clear();rect({0,0,1280,720},paper);auto background=backgrounds_.find(current_.id);if(!artOnly_&&background!=backgrounds_.end()&&background->second){Uint8 tint=fullscreen_?255:194;SDL_SetTextureColorMod(background->second,tint,tint,tint);SDL_RenderCopy(renderer_,background->second,nullptr,nullptr);}if(artOnly_){
+            auto palette=artColors_.find(current_.id);rect({0,0,1280,720},palette!=artColors_.end()?palette->second:surface);
+            if(!artShadow_){auto* shadow=album_art_shadow();if(shadow){artShadow_=SDL_CreateTextureFromSurface(renderer_,shadow);SDL_FreeSurface(shadow);}}
+            SDL_Rect shadowBounds{336,66,608,608};if(artShadow_)SDL_RenderCopy(renderer_,artShadow_,nullptr,&shadowBounds);
+            auto art=textures_.find(current_.id);if(art!=textures_.end())rounded_album_art(renderer_,art->second,{360,80,560,560});
+            if((art==textures_.end()||background==backgrounds_.end())&&SDL_GetTicks()-artworkRetry_>5000){artworkRetry_=SDL_GetTicks();artwork({current_});}
+            SDL_RenderPresent(renderer_);return;
+        }audioIndicator();if(fullscreen_){if((!textures_.count(current_.id)||!backgrounds_.count(current_.id))&&SDL_GetTicks()-artworkRetry_>5000){artworkRetry_=SDL_GetTicks();artwork({current_});}drawFullscreen();SDL_RenderPresent(renderer_);return;}
         label("EchoNX",40,24,36,ink);label("YouTube Music",205,36,18,muted);
         cover(current_,{40,105,350,350});hits_.push_back({{40,105,350,350},[this]{focusPlayer();}});
         songTitle(current_.id.empty()?"Your next listen":current_.title,40,474,28,350);songTitle(current_.id.empty()?"Pick a song on the right":display_artists(current_),40,512,22,350,muted);
@@ -327,7 +329,7 @@ public:
         for(size_t i=firstHit;i<hits_.size();i++){SDL_Rect clipped{};SDL_IntersectRect(&hits_[i].rect,&clip,&clipped);hits_[i].rect=clipped;}
         SDL_RenderSetClipRect(renderer_,nullptr);if(rows.size()*72>390){int height=std::max(20,390*390/int(rows.size()*72));rect({1248,199+int((390-height)*listScroll_.offset/(rows.size()*72-390)),3,height},muted);}
         if(rows.empty())label(loading_?"Loading songs from YouTube Music...":tab_==2?"Your library is empty. Play a song, then press -.":tab_==3?"Choose a song to start a queue.":"Press X to search or tap Refresh.",450,255,22,muted,760);
-        std::string message=loading_?"Loading YouTube Music...":notice_.empty()?player_->status():notice_;if(message!="Playing audio only")label(message,440,598,18,muted,780);label("Tap cover: Fullscreen   Y Play next   - Save   + Screen off",440,627,18,muted,800);
+        std::string message=loading_?"Loading YouTube Music...":notice_.empty()?player_->status():notice_;if(message!="Playing audio only")label(message,440,598,18,muted,780);label("Tap cover: Fullscreen   Y Play next   - Save   + Art mode",440,627,18,muted,800);
         for(int i=0;i<6;i++){SDL_Rect r{440+i*133,662,125,46};round(r,16,i==tab_?ink:surface);centeredLabel(tabNames[i],r,22,i==tab_?paper:ink);hits_.push_back({r,[this,i]{changeTab(i);}});}
         SDL_RenderPresent(renderer_);
     }
@@ -344,24 +346,25 @@ public:
     void run(){Uint32 previousFrame=SDL_GetTicks();while(running_){Uint32 now=SDL_GetTicks();float elapsed=std::min(.05f,(now-previousFrame)/1000.f);previousFrame=now;
 #ifdef __SWITCH__
         if(!appletMainLoop())break;padUpdate(&pad_);uint64_t down=padGetButtonsDown(&pad_);
-            if(!fullscreen_&&!screenOff_&&!pointerActive_){auto left=padGetStickPos(&pad_,0),right=padGetStickPos(&pad_,1);float speed=analog_scroll_speed(left.y,right.y);int direction=std::abs(speed)>90?(speed>0?1:-1):0;if(direction!=analogDirection_){analogDirection_=direction;if(direction){action(direction>0?5:4);analogRepeat_=now+350;}}else if(direction&&int32_t(now-analogRepeat_)>=0){action(direction>0?5:4);analogRepeat_=now+140;}}else analogDirection_=0;
+            if(!fullscreen_&&!artOnly_&&!pointerActive_){auto left=padGetStickPos(&pad_,0),right=padGetStickPos(&pad_,1);float speed=analog_scroll_speed(left.y,right.y);int direction=std::abs(speed)>90?(speed>0?1:-1):0;if(direction!=analogDirection_){analogDirection_=direction;if(direction){action(direction>0?5:4);analogRepeat_=now+350;}}else if(direction&&int32_t(now-analogRepeat_)>=0){action(direction>0?5:4);analogRepeat_=now+140;}}else analogDirection_=0;
         const uint64_t masks[]={HidNpadButton_A,HidNpadButton_B,HidNpadButton_X,HidNpadButton_Y,HidNpadButton_Up,HidNpadButton_Down,HidNpadButton_L,HidNpadButton_R,HidNpadButton_ZL,HidNpadButton_ZR,HidNpadButton_Plus,HidNpadButton_Minus,HidNpadButton_StickR,HidNpadButton_StickL};
-        for(int i=0;i<14;i++)if(down&masks[i]){action(i);break;}
+        if(artOnly_){if(down&HidNpadButton_Plus)action(10);}else for(int i=0;i<14;i++)if(down&masks[i]){action(i);break;}
 #endif
         SDL_Event event;while(SDL_PollEvent(&event)){
             if(event.type==SDL_QUIT)running_=false;
-            if(event.type==SDL_WINDOWEVENT && event.window.event==SDL_WINDOWEVENT_FOCUS_LOST){wake();seekBar_.cancel();pointerActive_=false;pointerOnSeek_=false;}
-            if(event.type==SDL_MOUSEBUTTONDOWN||event.type==SDL_FINGERDOWN){if(pointerActive_)continue;if(screenOff_){wake();wakeTouch_=true;continue;}pointerX_=event.type==SDL_FINGERDOWN?int(event.tfinger.x*1280):event.button.x;pointerY_=event.type==SDL_FINGERDOWN?int(event.tfinger.y*720):event.button.y;pointerFinger_=event.type==SDL_FINGERDOWN?event.tfinger.fingerId:0;pointerActive_=true;pointerOnSeek_=seekBar_.begin(pointerX_,pointerY_);pointerOnList_=!pointerOnSeek_&&!fullscreen_&&pointerX_>=440&&pointerX_<1240&&pointerY_>=199&&pointerY_<589;pointerOnLyrics_=!pointerOnSeek_&&fullscreen_&&lyricScrollMax_>0&&pointerX_>=620&&pointerX_<1220&&pointerY_>=260&&pointerY_<530;if(pointerOnList_)listScroll_.begin(pointerY_);if(pointerOnLyrics_)lyricScroll_.begin(pointerY_);}
+            if(event.type==SDL_WINDOWEVENT && event.window.event==SDL_WINDOWEVENT_FOCUS_LOST){seekBar_.cancel();pointerActive_=false;pointerOnSeek_=false;}
+            if(artOnly_){if(event.type==SDL_KEYDOWN&&!event.key.repeat&&(event.key.keysym.sym==SDLK_PLUS||event.key.keysym.sym==SDLK_EQUALS||event.key.keysym.sym==SDLK_KP_PLUS))action(10);continue;}
+            if(event.type==SDL_MOUSEBUTTONDOWN||event.type==SDL_FINGERDOWN){if(pointerActive_)continue;pointerX_=event.type==SDL_FINGERDOWN?int(event.tfinger.x*1280):event.button.x;pointerY_=event.type==SDL_FINGERDOWN?int(event.tfinger.y*720):event.button.y;pointerFinger_=event.type==SDL_FINGERDOWN?event.tfinger.fingerId:0;pointerActive_=true;pointerOnSeek_=seekBar_.begin(pointerX_,pointerY_);pointerOnList_=!pointerOnSeek_&&!fullscreen_&&pointerX_>=440&&pointerX_<1240&&pointerY_>=199&&pointerY_<589;pointerOnLyrics_=!pointerOnSeek_&&fullscreen_&&lyricScrollMax_>0&&pointerX_>=620&&pointerX_<1220&&pointerY_>=260&&pointerY_<530;if(pointerOnList_)listScroll_.begin(pointerY_);if(pointerOnLyrics_)lyricScroll_.begin(pointerY_);}
             if(event.type==SDL_MOUSEMOTION||event.type==SDL_FINGERMOTION){if(!pointerActive_)continue;if(event.type==SDL_FINGERMOTION&&event.tfinger.fingerId!=pointerFinger_)continue;pointerX_=event.type==SDL_FINGERMOTION?int(event.tfinger.x*1280):event.motion.x;pointerY_=event.type==SDL_FINGERMOTION?int(event.tfinger.y*720):event.motion.y;if(pointerOnSeek_)seekBar_.move(pointerX_);if(pointerOnList_)listScroll_.move(pointerY_,std::max(0.f,float(visible().size()*72)-390));if(pointerOnLyrics_)lyricScroll_.move(pointerY_,lyricScrollMax_);}
-            if(event.type==SDL_MOUSEBUTTONUP||event.type==SDL_FINGERUP){if(wakeTouch_){wakeTouch_=false;continue;}if(!pointerActive_)continue;if(event.type==SDL_FINGERUP&&event.tfinger.fingerId!=pointerFinger_)continue;pointerX_=event.type==SDL_FINGERUP?int(event.tfinger.x*1280):event.button.x;pointerY_=event.type==SDL_FINGERUP?int(event.tfinger.y*720):event.button.y;if(pointerOnSeek_){seekBar_.move(pointerX_);auto target=seekBar_.release(current_.id,SDL_GetTicks());pointerOnSeek_=false;pointerActive_=false;if(target)player_->seek(*target);continue;}bool tap=true;if(pointerOnList_){listScroll_.move(pointerY_,std::max(0.f,float(visible().size()*72)-390));tap=listScroll_.end();}if(pointerOnLyrics_){lyricScroll_.move(pointerY_,lyricScrollMax_);tap=lyricScroll_.end();}pointerActive_=false;if(tap)for(auto& hit:hits_)if(pointerX_>=hit.rect.x&&pointerX_<hit.rect.x+hit.rect.w&&pointerY_>=hit.rect.y&&pointerY_<hit.rect.y+hit.rect.h){auto action=hit.action;action();break;}}
+            if(event.type==SDL_MOUSEBUTTONUP||event.type==SDL_FINGERUP){if(!pointerActive_)continue;if(event.type==SDL_FINGERUP&&event.tfinger.fingerId!=pointerFinger_)continue;pointerX_=event.type==SDL_FINGERUP?int(event.tfinger.x*1280):event.button.x;pointerY_=event.type==SDL_FINGERUP?int(event.tfinger.y*720):event.button.y;if(pointerOnSeek_){seekBar_.move(pointerX_);auto target=seekBar_.release(current_.id,SDL_GetTicks());pointerOnSeek_=false;pointerActive_=false;if(target)player_->seek(*target);continue;}bool tap=true;if(pointerOnList_){listScroll_.move(pointerY_,std::max(0.f,float(visible().size()*72)-390));tap=listScroll_.end();}if(pointerOnLyrics_){lyricScroll_.move(pointerY_,lyricScrollMax_);tap=lyricScroll_.end();}pointerActive_=false;if(tap)for(auto& hit:hits_)if(pointerX_>=hit.rect.x&&pointerX_<hit.rect.x+hit.rect.w&&pointerY_>=hit.rect.y&&pointerY_<hit.rect.y+hit.rect.h){auto action=hit.action;action();break;}}
             if(event.type==SDL_MOUSEWHEEL&&!fullscreen_)listScroll_.offset=std::clamp(listScroll_.offset-event.wheel.y*48.f,0.f,std::max(0.f,float(visible().size()*72)-390));
-            if(event.type==SDL_KEYDOWN){switch(event.key.keysym.sym){case SDLK_RETURN:action(0);break;case SDLK_ESCAPE:action(12);break;case SDLK_UP:action(4);break;case SDLK_DOWN:action(5);break;case SDLK_x:action(2);break;case SDLK_SPACE:togglePlayback();break;case SDLK_y:action(3);break;case SDLK_LEFT:action(6);break;case SDLK_RIGHT:action(7);break;}}
+            if(event.type==SDL_KEYDOWN){switch(event.key.keysym.sym){case SDLK_PLUS:case SDLK_EQUALS:case SDLK_KP_PLUS:if(!event.key.repeat)action(10);break;case SDLK_RETURN:action(0);break;case SDLK_ESCAPE:action(12);break;case SDLK_UP:action(4);break;case SDLK_DOWN:action(5);break;case SDLK_x:action(2);break;case SDLK_SPACE:togglePlayback();break;case SDLK_y:action(3);break;case SDLK_LEFT:action(6);break;case SDLK_RIGHT:action(7);break;}}
         }
         applyPending();if(player_->ended())next(1,true);
 #ifdef __SWITCH__
         appletSetMediaPlaybackState(player_->active());
 #endif
-        if(screenOff_){if(!player_->active())wake();SDL_Delay(20);}else{draw();SDL_Delay(16);}
+        draw();SDL_Delay(16);
     }}
 };
 }
