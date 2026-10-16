@@ -25,5 +25,5 @@ inline Lyrics parse_lyrics(const Json& root){
     std::istringstream plain(str(root,"/plainLyrics"));while(std::getline(plain,line)){if(!line.empty()&&line.back()=='\r')line.pop_back();if(!line.empty())result.plain.push_back(line);}
     result.status=result.plain.empty()?"Lyrics unavailable for this song":"Lyrics / no timestamps";return result;
 }
-inline int lyric_index(const Lyrics& lyrics,double time){int selected=-1;for(size_t i=0;i<lyrics.lines.size()&&lyrics.lines[i].time<=time;i++)selected=int(i);return selected;}
+inline int lyric_index(const Lyrics& lyrics,double time){auto end=std::upper_bound(lyrics.lines.begin(),lyrics.lines.end(),time,[](double t,const LyricLine& line){return t<line.time;});return int(end-lyrics.lines.begin())-1;}
 }

@@ -44,15 +44,16 @@ inline std::vector<LocalPlaylist> load_playlists(const std::string& path){
 }
 inline bool playlist_add(LocalPlaylist& list,const Song& song){if(song.id.empty()||std::any_of(list.tracks.begin(),list.tracks.end(),[&](const Song& track){return track.id==song.id;}))return false;list.tracks.push_back(song);return true;}
 class SessionWriter {
-    std::string path_,error_;std::mutex mutex_;std::condition_variable cv_;std::optional<Json> pending_;bool closing_=false;std::thread thread_;
+    std::string path_,error_;std::mutex mutex_;std::condition_variable cv_;struct Pending{Json document;std::uint64_t ticket;};std::optional<Pending> pending_;std::uint64_t submitted_=0,completed_=0;bool closing_=false;std::thread thread_;
 public:
     explicit SessionWriter(std::string path):path_(std::move(path)),thread_([this]{
-        Json lastSaved;for(;;){Json document;{std::unique_lock<std::mutex> lock(mutex_);cv_.wait(lock,[&]{return closing_||pending_.has_value();});if(!pending_&&closing_)break;document=std::move(*pending_);pending_.reset();}
-            if(document==lastSaved)continue;try{save_document(path_,document);lastSaved=std::move(document);}catch(const std::exception& e){std::lock_guard<std::mutex> lock(mutex_);error_=e.what();}
+        Json lastSaved;for(;;){Json document;std::uint64_t ticket;{std::unique_lock<std::mutex> lock(mutex_);cv_.wait(lock,[&]{return closing_||pending_.has_value();});if(!pending_&&closing_)break;document=std::move(pending_->document);ticket=pending_->ticket;pending_.reset();}
+            try{if(document!=lastSaved){save_document(path_,document);lastSaved=std::move(document);}std::lock_guard<std::mutex> lock(mutex_);completed_=ticket;}catch(const std::exception& e){std::lock_guard<std::mutex> lock(mutex_);error_=e.what();}
         }
     }){}
     ~SessionWriter(){{std::lock_guard<std::mutex> lock(mutex_);closing_=true;}cv_.notify_one();if(thread_.joinable())thread_.join();}
-    void submit(Json snapshot){{std::lock_guard<std::mutex> lock(mutex_);pending_=std::move(snapshot);}cv_.notify_one();}
+    std::uint64_t submit(Json snapshot){std::uint64_t ticket;{std::lock_guard<std::mutex> lock(mutex_);ticket=++submitted_;pending_=Pending{std::move(snapshot),ticket};}cv_.notify_one();return ticket;}
+    std::uint64_t completed(){std::lock_guard<std::mutex> lock(mutex_);return completed_;}
     std::string takeError(){std::lock_guard<std::mutex> lock(mutex_);auto error=std::move(error_);error_.clear();return error;}
 };
 }

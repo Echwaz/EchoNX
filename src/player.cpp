@@ -47,14 +47,20 @@ Player::Player(Api& api):api_(api){
     SDL_AudioSpec want{};want.freq=48000;want.format=AUDIO_S16SYS;want.channels=2;want.samples=1024;
     device_=SDL_OpenAudioDevice(nullptr,0,&want,nullptr,0);
     if(!device_)throw std::runtime_error(SDL_GetError());
+    worker_=std::thread([this]{
+        for(;;){Request request;{std::unique_lock<std::mutex> lock(commandMutex_);commandCv_.wait(lock,[this]{return shuttingDown_||pending_.has_value();});if(shuttingDown_)break;request=std::move(*pending_);pending_.reset();abort_=false;started_=false;position_=request.position;duration_=0;seek_=request.position>0?request.position:-1;switching_=false;SDL_ClearQueuedAudio(device_);SDL_PauseAudioDevice(device_,paused_?1:0);}decode(request.song);}
+    });
 }
-Player::~Player(){stop();if(device_)SDL_CloseAudioDevice(device_);}
+Player::~Player(){stop();{std::lock_guard<std::mutex> lock(commandMutex_);shuttingDown_=true;}commandCv_.notify_one();if(worker_.joinable())worker_.join();if(device_)SDL_CloseAudioDevice(device_);}
 void Player::status(const std::string& s){std::lock_guard<std::mutex> l(mutex_);status_=s;}
 std::string Player::status()const{std::lock_guard<std::mutex> l(mutex_);return status_;}
-void Player::stop(){abort_=true;if(worker_.joinable())worker_.join();SDL_ClearQueuedAudio(device_);SDL_PauseAudioDevice(device_,1);active_=false;done_=false;}
-void Player::play(const Song& song,double startSeconds){stop();started_=false;abort_=false;paused_=false;done_=false;seek_=startSeconds>0?startSeconds:-1;position_=std::max(0.,startSeconds);duration_=0;active_=true;status("Connecting to YouTube Music");SDL_PauseAudioDevice(device_,0);worker_=std::thread([this,song]{decode(song);});}
-void Player::toggle(){if(!active_)return;paused_=!paused_.load();SDL_PauseAudioDevice(device_,paused_?1:0);}
-void Player::seek(double s){if(active_ && duration_>0)seek_=std::max(0.0,std::min(s,duration_.load()-0.1));}
+void Player::stop(){std::lock_guard<std::mutex> lock(commandMutex_);abort_=true;pending_.reset();active_=false;done_=false;switching_=false;SDL_ClearQueuedAudio(device_);SDL_PauseAudioDevice(device_,1);}
+void Player::play(const Song& song,double startSeconds){
+    startSeconds=std::isfinite(startSeconds)?std::max(0.,startSeconds):0;
+    {std::lock_guard<std::mutex> lock(commandMutex_);abort_=true;pending_=Request{song,startSeconds};requestedPosition_=startSeconds;switching_=true;paused_=false;done_=false;started_=false;active_=true;SDL_PauseAudioDevice(device_,1);SDL_ClearQueuedAudio(device_);status("Connecting to YouTube Music");}commandCv_.notify_one();
+}
+void Player::toggle(){std::lock_guard<std::mutex> lock(commandMutex_);if(!active_)return;paused_=!paused_.load();if(!switching_)SDL_PauseAudioDevice(device_,paused_?1:0);}
+void Player::seek(double s){std::lock_guard<std::mutex> lock(commandMutex_);if(active_&&!switching_&&duration_>0)seek_=std::max(0.,std::min(s,std::max(0.,duration_.load()-.1)));}
 void Player::decode(const Song& song){
     prefer_cpu(2);
     try{
@@ -99,16 +105,19 @@ void Player::decode(const Song& song){
             double target=seek_.exchange(-1);
             if(target>=0){
                 check(av_seek_frame(m.format,-1,int64_t(target*AV_TIME_BASE),AVSEEK_FLAG_BACKWARD),"Seek audio");
-                avcodec_flush_buffers(m.codec);swr_close(m.resampler);check(swr_init(m.resampler),"Reset audio conversion");SDL_ClearQueuedAudio(device_);samples=0;base=target;position_=target;
+                avcodec_flush_buffers(m.codec);swr_close(m.resampler);check(swr_init(m.resampler),"Reset audio conversion");SDL_ClearQueuedAudio(device_);samples=0;base=target;position_=target;eof=false;
+            }
+            if(eof){
+                if(SDL_GetQueuedAudioSize(device_)==0){std::lock_guard<std::mutex> lock(commandMutex_);if(seek_>=0)continue;if(!abort_){active_=false;done_=true;status("Track finished");}return;}
+                position_=base+double(samples)/48000-double(SDL_GetQueuedAudioSize(device_))/192000;SDL_Delay(15);continue;
             }
             int rc=av_read_frame(m.format,m.packet);
-            if(rc==AVERROR_EOF){if(!reader.error.empty())throw std::runtime_error(reader.error);eof=true;avcodec_send_packet(m.codec,nullptr);consume();break;}
+            if(rc==AVERROR_EOF){if(!reader.error.empty())throw std::runtime_error(reader.error);eof=true;check(avcodec_send_packet(m.codec,nullptr),"Finish audio decoder");consume();continue;}
             if(rc<0){if(!reader.error.empty())throw std::runtime_error(reader.error);check(rc,"Read audio");}
             if(m.packet->stream_index==track){check(avcodec_send_packet(m.codec,m.packet),"Send audio packet");consume();}
             av_packet_unref(m.packet);
         }
-        while(eof && !abort_ && SDL_GetQueuedAudioSize(device_)>0){position_=base+double(samples)/48000-double(SDL_GetQueuedAudioSize(device_))/192000;SDL_Delay(20);}
-        if(!abort_){active_=false;done_=true;status("Track finished");}
-    }catch(const std::exception& e){if(!abort_){status(e.what());active_=false;SDL_ClearQueuedAudio(device_);}}
+
+    }catch(const std::exception& e){std::lock_guard<std::mutex> lock(commandMutex_);if(!abort_){status(e.what());active_=false;SDL_ClearQueuedAudio(device_);}}
 }
 }

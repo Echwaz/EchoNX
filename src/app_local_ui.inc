@@ -23,27 +23,34 @@
 #endif
         auto first=name.find_first_not_of(" \t\r\n"),last=name.find_last_not_of(" \t\r\n");return first==std::string::npos?"":name.substr(first,last-first+1);
     }
-    bool commitPlaylists(std::vector<LocalPlaylist> previous){try{save_document(playlistsPath_,playlists_document(playlists_));return true;}catch(const std::exception& e){playlists_=std::move(previous);notice_=e.what();return false;}}
-    void newPlaylist(Song song={}){
-        auto name=enterName("Playlist name");if(name.empty())return;auto previous=playlists_;std::string id=std::to_string(std::time(nullptr))+"-"+std::to_string(SDL_GetPerformanceCounter());while(findPlaylist(id)>=0)id+="x";
-        LocalPlaylist list{id,name,{}};if(!song.id.empty())playlist_add(list,song);playlists_.push_back(std::move(list));if(commitPlaylists(std::move(previous)))notice_="Created playlist: "+name;
+    bool commitPlaylists(){
+        if(!playlistWriter_){notice_="Playlist storage unavailable.";return false;}playlistTicket_=playlistWriter_->submit(playlists_document(playlists_));playlistRetry_=false;return true;
     }
-    void addToPlaylist(const std::string& id,const Song& song){int index=findPlaylist(id);if(index<0)return;auto previous=playlists_;if(!playlist_add(playlists_[index],song)){notice_="This song is already in the playlist.";return;}auto name=playlists_[index].name;if(commitPlaylists(std::move(previous)))notice_="Added to "+name;}
+    void pollPlaylistStorage(){
+        if(!playlistWriter_)return;auto error=playlistWriter_->takeError();if(!error.empty()){notice_="Playlist changes not saved: "+error+" Retrying...";playlistRetry_=true;playlistRetryAt_=SDL_GetTicks();}
+        if(playlistWriter_->completed()>=playlistTicket_)playlistRetry_=false;
+        if(playlistRetry_&&SDL_GetTicks()-playlistRetryAt_>=2000){playlistRetryAt_=SDL_GetTicks();playlistTicket_=playlistWriter_->submit(playlists_document(playlists_));}
+    }
+    void newPlaylist(Song song={}){
+        auto name=enterName("Playlist name");if(name.empty())return;std::string id=std::to_string(std::time(nullptr))+"-"+std::to_string(SDL_GetPerformanceCounter());while(findPlaylist(id)>=0)id+="x";
+        LocalPlaylist list{id,name,{}};if(!song.id.empty())playlist_add(list,song);playlists_.push_back(std::move(list));if(commitPlaylists())notice_="Created playlist: "+name;
+    }
+    void addToPlaylist(const std::string& id,const Song& song){int index=findPlaylist(id);if(index<0)return;if(!playlist_add(playlists_[index],song)){notice_="This song is already in the playlist.";return;}auto name=playlists_[index].name;if(commitPlaylists())notice_="Added to "+name;}
     void closeMenu(){hits_.clear();menu_.clear();menuSelection_=menuFirst_=0;menuTitle_.clear();}
     void openMenu(const std::string& title,std::vector<MenuEntry> entries){hits_.clear();menuTitle_=title;menu_=std::move(entries);menuSelection_=menuFirst_=0;pointerActive_=false;pointerOnSeek_=false;seekBar_.cancel();listScroll_.end();}
     void activateMenu(int index){if(index<0||index>=int(menu_.size()))return;auto action=menu_[index].action;closeMenu();action();}
     void playlistPicker(Song song){std::vector<MenuEntry> options;options.push_back({"New playlist...",[this,song]{newPlaylist(song);}});for(const auto& list:playlists_){auto id=list.id;options.push_back({list.name,[this,id,song]{addToPlaylist(id,song);}});}options.push_back({"Cancel",[this]{}});openMenu("Add to playlist",std::move(options));}
     void playlistOptions(std::string id){int index=findPlaylist(id);if(index<0)return;auto title=playlists_[index].name;
         openMenu(title,{{"New playlist...",[this]{newPlaylist();}},{"Play playlist",[this,id]{int i=findPlaylist(id);if(i<0)return;openPlaylist(i);if(!playlists_[i].tracks.empty())choose(0);else notice_="This playlist is empty.";}},
-            {"Rename playlist",[this,id]{int i=findPlaylist(id);if(i<0)return;auto name=enterName("Rename playlist",playlists_[i].name);if(name.empty())return;auto previous=playlists_;playlists_[i].name=name;commitPlaylists(std::move(previous));}},
-            {"Delete playlist",[this,id,title]{openMenu("Delete "+title+"?",{{"Delete playlist",[this,id]{int i=findPlaylist(id);if(i<0)return;auto previous=playlists_;playlists_.erase(playlists_.begin()+i);if(commitPlaylists(std::move(previous)))showPlaylistRoot();}},{"Cancel",[this]{}}});}},
+            {"Rename playlist",[this,id]{int i=findPlaylist(id);if(i<0)return;auto name=enterName("Rename playlist",playlists_[i].name);if(name.empty())return;playlists_[i].name=name;commitPlaylists();}},
+            {"Delete playlist",[this,id,title]{openMenu("Delete "+title+"?",{{"Delete playlist",[this,id]{int i=findPlaylist(id);if(i<0)return;playlists_.erase(playlists_.begin()+i);if(commitPlaylists())showPlaylistRoot();}},{"Cancel",[this]{}}});}},
             {"Cancel",[this]{}}});
     }
     void songOptions(){
         if(playlistBrowser()){if(selected_<int(playlists_.size()))playlistOptions(playlists_[selected_].id);else newPlaylist();return;}
         auto& rows=visible();Song song=fullscreen_?current_:selected_<int(rows.size())?rows[selected_]:current_;if(song.id.empty()){if(tab_==2){std::vector<MenuEntry> entries{{"Your playlists",[this]{showPlaylistRoot();}},{"New playlist...",[this]{newPlaylist();}},{"Recently played",[this]{showHistory();}},{"Search songs",[this]{search();}},{"Cancel",[this]{}}};if(historyView_)entries.insert(entries.begin(),{"Library",[this]{showSavedSongs();}});openMenu("Your library",std::move(entries));}else notice_="Choose a song first.";return;}
         std::vector<MenuEntry> options{{"Add to playlist",[this,song]{playlistPicker(song);}}};
-        if(tab_==2&&playlistsView_&&activePlaylist_>=0){auto id=playlists_[activePlaylist_].id;options.push_back({"Remove from this playlist",[this,id,song]{int i=findPlaylist(id);if(i<0)return;auto previous=playlists_;auto& tracks=playlists_[i].tracks;tracks.erase(std::remove_if(tracks.begin(),tracks.end(),[&](const Song& s){return s.id==song.id;}),tracks.end());if(commitPlaylists(std::move(previous))){selected_=std::min(selected_,std::max(0,int(tracks.size())-1));notice_="Removed from playlist.";}}});}
+        if(tab_==2&&playlistsView_&&activePlaylist_>=0){auto id=playlists_[activePlaylist_].id;options.push_back({"Remove from this playlist",[this,id,song]{int i=findPlaylist(id);if(i<0)return;auto& tracks=playlists_[i].tracks;tracks.erase(std::remove_if(tracks.begin(),tracks.end(),[&](const Song& s){return s.id==song.id;}),tracks.end());if(commitPlaylists()){selected_=std::min(selected_,std::max(0,int(tracks.size())-1));notice_="Removed from playlist.";}}});}
         if(tab_==2&&!playlistsView_)options.push_back({"Your playlists",[this]{showPlaylistRoot();}});
         if(tab_==2&&!historyView_)options.push_back({"Recently played",[this]{showHistory();}});
         if(tab_==2&&historyView_)options.push_back({"Library",[this]{showSavedSongs();}});
@@ -61,4 +68,4 @@
         SessionSnapshot session{queue_,playbackOrder_.displayOrder(),queueIndex_,playbackOrder_.repeat,playbackOrder_.shuffle,resumePending_?resumePosition_:player_->position(),resumePending_?resumeDuration_:player_->duration()};
         if(session.queue.empty())return;sessionWriter_->submit(session_document(session));
     }
-    void startCurrent(double position=0){if(current_.id.empty())return;resumePending_=false;resumePosition_=0;player_->play(current_,position);historyCandidate_=current_.id;checkpoint(true);}
+    void startCurrent(double position=0){if(current_.id.empty())return;resumePending_=false;resumePosition_=0;if(relatedFor_!=current_.id)relatedRows_.clear();player_->play(current_,position);historyCandidate_=current_.id;checkpoint(true);}

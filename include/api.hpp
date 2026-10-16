@@ -13,15 +13,15 @@ std::string http(const std::string& url, const std::string& body="",
     const char* agent=browserUA, size_t maxBytes=8*1024*1024);
 class Api {
     std::mutex mutex_;std::string visitor_;
-    Json context(); Json call(const std::string& endpoint,Json payload,bool fresh=false);
+    Json context(); Json call(const std::string& endpoint,Json payload,bool fresh=false,std::atomic<bool>* abort=nullptr);
 public:
-    std::vector<Song> home(bool fresh=false);
-    std::vector<Song> search(const std::string& query,bool fresh=false);
-    std::vector<Song> related(const std::string& id,bool fresh=false);
-    std::vector<Song> artist(const Song& song,bool fresh=false);
-    std::vector<Song> album(const Song& song,bool fresh=false);
+    std::vector<Song> home(bool fresh=false,std::atomic<bool>* abort=nullptr);
+    std::vector<Song> search(const std::string& query,bool fresh=false,std::atomic<bool>* abort=nullptr);
+    std::vector<Song> related(const std::string& id,bool fresh=false,std::atomic<bool>* abort=nullptr);
+    std::vector<Song> artist(const Song& song,bool fresh=false,std::atomic<bool>* abort=nullptr);
+    std::vector<Song> album(const Song& song,bool fresh=false,std::atomic<bool>* abort=nullptr);
     Lyrics lyrics(const Song& song,std::atomic<bool>* abort=nullptr);
-    std::vector<Song> for_saved(const std::vector<Song>& saved,size_t offset=0,bool fresh=false);
+    std::vector<Song> for_saved(const std::vector<Song>& saved,size_t offset=0,bool fresh=false,std::atomic<bool>* abort=nullptr);
     Stream resolve(const std::string& id,std::atomic<bool>* abort);
 };
 }
