@@ -52,7 +52,7 @@ class App {
 public:
 #endif
     SDL_Window* window_=nullptr;SDL_Renderer* renderer_=nullptr;std::map<int,TTF_Font*> fonts_;
-    using TexturePtr=std::shared_ptr<SDL_Texture>;std::map<std::string,TexturePtr> textures_,backgrounds_,thumbnails_;std::map<std::string,Uint32> thumbnailUse_;std::vector<Hit> hits_;std::vector<Song> upcomingRows_;std::vector<int> upcomingIndices_;
+    using TexturePtr=std::shared_ptr<SDL_Texture>;std::map<std::string,TexturePtr> textures_,backgrounds_,thumbnails_;std::map<std::string,Uint32> thumbnailUse_;std::vector<Hit> hits_;std::vector<Song> upcomingRows_;bool queueDirty_=true;std::vector<int> upcomingIndices_;
     std::map<std::string,SDL_Texture*> shapeTextures_;SDL_Texture* artShadow_=nullptr;std::map<std::string,SDL_Color> artColors_;std::map<std::string,TexturePtr> clockBackgrounds_;std::map<std::string,std::weak_ptr<SDL_Texture>> fullGpu_,backgroundGpu_,thumbnailGpu_,clockGpu_;SDL_Texture* clockFace_=nullptr;std::string clockValue_;int clockWidth_=0,clockHeight_=0;bool clockVisible_=false;TouchScroll clockTouch_;Uint32 batteryPoll_=0;int batteryPercent_=-1;bool batteryCharging_=false;
     TextCache textCache_;
     struct LyricLayout{std::string song;std::uint64_t version=0;std::vector<std::string> lines;std::vector<int> sizes,heights;std::vector<double> centers;int total=0;};LyricLayout lyricLayout_;std::map<std::string,std::uint64_t> lyricVersions_;
@@ -60,7 +60,7 @@ public:
     PlaybackOrder playbackOrder_{unsigned(SDL_GetPerformanceCounter())};Api api_,audioApi_;std::unique_ptr<Player> player_;std::thread fetch_,art_,artCacheWorker_,lyricsWorker_;
     std::atomic<bool> closing_{false},loading_{false};std::mutex dataMutex_;
     std::vector<Song> results_,searchRows_,artistRows_,albumRows_,relatedRows_,library_,queue_,artRequests_;struct PreparedArt{std::shared_ptr<SDL_Surface> image,background,thumbnail,clock;std::string key;};struct DecodedArt{PreparedArt art;std::uint64_t used;};std::map<std::string,DecodedArt> decodedArt_;std::uint64_t decodedClock_=0;std::set<std::string> fullArtKeys_;std::map<std::string,PreparedArt> artPending_;std::mutex imageDecodeMutex_;std::string artFocus_;std::set<std::string> fullArtWanted_;
-    std::condition_variable lyricsCv_;Song lyricsRequest_;bool lyricsRequested_=false;std::map<std::string,Lyrics> lyricCache_,lyricPending_;
+    std::condition_variable lyricsCv_;Song lyricsRequest_;bool lyricsRequested_=false;std::string lyricDesired_;std::shared_ptr<std::atomic<bool>> lyricCancel_;std::map<std::string,Lyrics> lyricCache_,lyricPending_;
     SeekBarState seekBar_;bool pointerOnSeek_=false;TouchScroll listScroll_,lyricScroll_;float lyricScrollMax_=0;std::string lyricScrollSong_;bool fullscreen_=false,pointerActive_=false,pointerOnList_=false,pointerOnLyrics_=false;int pointerY_=0;SDL_FingerID pointerFinger_=0;
     std::condition_variable artCacheCv_,fetchCv_;std::vector<Song> artCacheRequests_;std::string artInFlight_,artInFlightCover_;std::shared_ptr<std::atomic<bool>> artCancel_;
     struct FetchJob{int mode=0,searchKind=0;std::uint64_t revision=0;std::string value;bool fresh=false;Song anchor,playing;std::vector<Song> saved;size_t offset=0;};
@@ -74,6 +74,7 @@ public:
 #endif
     Uint32 audioPoll_=0;std::string audioRoute_="Audio: --";
     Uint32 artworkRetry_=0,analogRepeat_=0;int analogDirection_=0;float homeScroll_=0;int homeSelection_=0;
+    std::unique_ptr<SessionWriter> libraryWriter_;std::uint64_t libraryTicket_=0;bool libraryRetry_=false;Uint32 libraryRetryAt_=0;
     std::unique_ptr<SessionWriter> playlistWriter_;std::uint64_t playlistTicket_=0;bool playlistRetry_=false;Uint32 playlistRetryAt_=0;
     std::string libraryPath_,sessionPath_,playlistsPath_,historyPath_,historyCandidate_;std::unique_ptr<SessionWriter> historyWriter_;bool historyView_=false;std::vector<HistoryEntry> history_;std::vector<Song> historyRows_;std::unique_ptr<SessionWriter> sessionWriter_;Uint32 sessionSaved_=0;bool resumePending_=false,playlistsView_=false;double resumePosition_=0,resumeDuration_=0;int activePlaylist_=-1;std::vector<LocalPlaylist> playlists_;std::vector<Song> playlistCoverRows_;
     struct MenuEntry{std::string text;std::function<void()> action;};std::vector<MenuEntry> menu_;std::string menuTitle_;int menuSelection_=0,menuFirst_=0;
@@ -110,11 +111,16 @@ public:
         if(it!=shapeTextures_.end()){SDL_Rect dest{r.x+4,r.y+6,36,36};SDL_RenderCopy(renderer_,it->second,nullptr,&dest);}
         if(!shuffle&&playbackOrder_.repeat==2)centeredLabel("1",{r.x+10,r.y+12,24,24},12,fg);
         if(enabled)round({r.x+20,r.y+44,4,4},2,ink);
-        hits_.push_back({r,[this,shuffle]{if(shuffle){playbackOrder_.shuffle=!playbackOrder_.shuffle;playbackOrder_.reset(int(queue_.size()),queueIndex_);notice_=playbackOrder_.shuffle?"Shuffle on":"Shuffle off";}else{playbackOrder_.repeat=(playbackOrder_.repeat+1)%3;notice_=playbackOrder_.repeat==0?"Repeat off":playbackOrder_.repeat==1?"Repeat all":"Repeat one";}artwork({current_});checkpoint(true);}});
+        hits_.push_back({r,[this,shuffle]{if(shuffle){playbackOrder_.shuffle=!playbackOrder_.shuffle;playbackOrder_.reset(int(queue_.size()),queueIndex_);queueDirty_=true;notice_=playbackOrder_.shuffle?"Shuffle on":"Shuffle off";}else{playbackOrder_.repeat=(playbackOrder_.repeat+1)%3;notice_=playbackOrder_.repeat==0?"Repeat off":playbackOrder_.repeat==1?"Repeat all":"Repeat one";}artwork({current_});checkpoint(true);}});
     }
     void transport(int center,int y){playbackMode({center-175,y+18,44,48},true);icon({center-117,y+16,52,52},0,[this]{next(-1);});icon({center-42,y,84,84},player_->active()&&!player_->paused()?2:1,[this]{togglePlayback();},true);icon({center+65,y+16,52,52},3,[this]{next(1);});playbackMode({center+131,y+18,44,48},false);}
     void focusPlayer(){if(current_.id.empty()){search();return;}fullscreen_=true;requestLyrics(current_,true);}
-    void requestLyrics(const Song& song,bool retry=false){auto found=lyricCache_.find(song.id);if(found!=lyricCache_.end()&&(!retry||!found->second.lines.empty()||!found->second.plain.empty()||found->second.status=="Instrumental"))return;lyricCache_[song.id]={{},{},"Loading lyrics..."};++lyricVersions_[song.id];
+    void requestLyrics(const Song& song,bool retry=false){
+        if(song.id.empty())return;
+        {std::lock_guard<std::mutex> lock(dataMutex_);if(lyricDesired_!=song.id){if(lyricCancel_)lyricCancel_->store(true);lyricsRequested_=false;lyricDesired_=song.id;}
+            else if(lyricsRequested_||(lyricCancel_&&!lyricCancel_->load()))return;}
+        auto found=lyricCache_.find(song.id);if(found!=lyricCache_.end()&&found->second.status!="Loading lyrics..."&&(!retry||!found->second.lines.empty()||!found->second.plain.empty()||found->second.status=="Instrumental"))return;
+        lyricCache_[song.id]={{},{},"Loading lyrics..."};++lyricVersions_[song.id];
 #ifdef ECHO_PREVIEW
         lyricCache_[song.id]={{},{},"Lyrics appear here when available"};
 #else
@@ -122,9 +128,12 @@ public:
 #endif
     }
     void cover(const Song& s,SDL_Rect r){auto& images=r.w>100?textures_:thumbnails_;auto it=images.find(s.id);if(it!=images.end()){SDL_RenderCopy(renderer_,it->second.get(),nullptr,&r);if(r.w<=100)thumbnailUse_[s.id]=SDL_GetTicks();}else{round(r,16,surface);if(r.w>100)label(s.title.empty()?"Music":s.title,r.x+20,r.y+r.h/2-16,28,muted,r.w-40);}}
-    std::vector<Song>& visible(){if(playlistBrowser()){playlistCoverRows_.clear();for(const auto& list:playlists_)playlistCoverRows_.push_back(list.tracks.empty()?Song{}:list.tracks.front());return playlistCoverRows_;}if(tab_==3){upcomingIndices_=playbackOrder_.displayOrder();upcomingRows_.clear();for(int i:upcomingIndices_)if(i>=0&&i<int(queue_.size()))upcomingRows_.push_back(queue_[i]);selected_=std::clamp(selected_,0,std::max(0,int(upcomingRows_.size())-1));return upcomingRows_;}return tab_==2?(historyView_?historyRows_:playlistsView_&&activePlaylist_>=0&&activePlaylist_<int(playlists_.size())?playlists_[activePlaylist_].tracks:library_):tab_==4?artistRows_:tab_==5?albumRows_:tab_==1?searchRows_:results_;}
-    void saveLibrary(){save_library(libraryPath_,library_);}
-    void favorite(Song song={}){if(song.id.empty())song=current_;if(song.id.empty()){notice_="Choose a song before saving it to your library.";return;}auto previous=library_;auto it=std::find_if(library_.begin(),library_.end(),[&](const Song& s){return s.id==song.id;});if(it==library_.end())library_.push_back(song);else library_.erase(it);try{saveLibrary();homeOffset_=0;notice_="Library updated";}catch(const std::exception& e){library_=std::move(previous);notice_=e.what();}}
+    std::vector<Song>& visible(){if(playlistBrowser()){playlistCoverRows_.clear();for(const auto& list:playlists_)playlistCoverRows_.push_back(list.tracks.empty()?Song{}:list.tracks.front());return playlistCoverRows_;}if(tab_==3){if(queueDirty_||upcomingRows_.size()!=queue_.size()){upcomingIndices_=playbackOrder_.displayOrder();upcomingRows_.clear();for(int i:upcomingIndices_)if(i>=0&&i<int(queue_.size()))upcomingRows_.push_back(queue_[i]);queueDirty_=false;}selected_=std::clamp(selected_,0,std::max(0,int(upcomingRows_.size())-1));return upcomingRows_;}return tab_==2?(historyView_?historyRows_:playlistsView_&&activePlaylist_>=0&&activePlaylist_<int(playlists_.size())?playlists_[activePlaylist_].tracks:library_):tab_==4?artistRows_:tab_==5?albumRows_:tab_==1?searchRows_:results_;}
+    void favorite(Song song={}){if(song.id.empty())song=current_;if(song.id.empty()){notice_="Choose a song before saving it to your library.";return;}if(!libraryWriter_){notice_="Library storage unavailable.";return;}
+        auto it=std::find_if(library_.begin(),library_.end(),[&](const Song& s){return s.id==song.id;});if(it==library_.end())library_.push_back(song);else library_.erase(it);
+        libraryTicket_=libraryWriter_->submitLibrary(library_);libraryRetry_=false;homeOffset_=0;notice_="Library updated";
+    }
+    void pollLibraryStorage(){if(!libraryWriter_)return;auto error=libraryWriter_->takeError();if(!error.empty()){notice_="Library changes not saved: "+error+" Retrying...";libraryRetry_=true;libraryRetryAt_=SDL_GetTicks();}if(libraryWriter_->completed()>=libraryTicket_)libraryRetry_=false;if(libraryRetry_&&SDL_GetTicks()-libraryRetryAt_>=2000){libraryRetryAt_=SDL_GetTicks();libraryTicket_=libraryWriter_->submitLibrary(library_);}}
     static std::string pageKey(int mode,const Song& song){return mode==4?song.albumId+"|"+song.id:song.artistId+"|"+song.artist;}
     #include "fetch_jobs.inc"
     #include "artwork_jobs.inc"
@@ -139,7 +148,7 @@ public:
     void applyPending(){
         {std::lock_guard<std::mutex> l(dataMutex_);
             applyFetchResults();
-            if(!pendingMetadata_.id.empty()){auto enrich=[&](Song& s){if(s.id!=pendingMetadata_.id)return;if(s.album.empty())s.album=pendingMetadata_.album;if(s.albumId.empty())s.albumId=pendingMetadata_.albumId;if(!pendingMetadata_.artistNames.empty())s.artistNames=pendingMetadata_.artistNames;};enrich(current_);for(auto& s:queue_)enrich(s);for(auto& s:artistRows_)enrich(s);pendingMetadata_={};}
+            if(!pendingMetadata_.id.empty()){queueDirty_=true;auto enrich=[&](Song& s){if(s.id!=pendingMetadata_.id)return;if(s.album.empty())s.album=pendingMetadata_.album;if(s.albumId.empty())s.albumId=pendingMetadata_.albumId;if(!pendingMetadata_.artistNames.empty())s.artistNames=pendingMetadata_.artistNames;};enrich(current_);for(auto& s:queue_)enrich(s);for(auto& s:artistRows_)enrich(s);pendingMetadata_={};}
             for(auto& [id,lyrics]:lyricPending_){lyricCache_[id]=std::move(lyrics);++lyricVersions_[id];}lyricPending_.clear();
             while(!artPending_.empty()){
                 auto item=artPending_.find(current_.id);if(item==artPending_.end()){auto& onscreen=visible();int first=int(listScroll_.offset)/72;for(int i=first;i<int(onscreen.size())&&i<first+artworkVisibleRows;i++){auto pending=artPending_.find(onscreen[i].id);if(pending!=artPending_.end()){item=pending;break;}}}if(item==artPending_.end())item=artPending_.begin();const auto& id=item->first;auto& ready=item->second;
@@ -156,15 +165,15 @@ public:
         }
 
     }
-    void choose(int i){if(playlistBrowser()){openPlaylist(i);return;}auto rows=visible();if(i<0||i>=int(rows.size()))return;if(tab_==1&&searchKind_!=0){if(searchKind_==1)openAlbum(rows[i]);else openArtist(rows[i]);return;}
-        if(tab_!=3){queue_.assign(rows.begin()+i,rows.end());queueIndex_=0;playbackOrder_.reset(int(queue_.size()),queueIndex_);}else{queueIndex_=upcomingIndices_[i];playbackOrder_.select(queueIndex_);selected_=i;}
+    void choose(int i){if(playlistBrowser()){openPlaylist(i);return;}const auto& rows=visible();if(i<0||i>=int(rows.size()))return;if(tab_==1&&searchKind_!=0){if(searchKind_==1)openAlbum(rows[i]);else openArtist(rows[i]);return;}
+        if(tab_!=3){queue_.assign(rows.begin()+i,rows.end());queueIndex_=0;playbackOrder_.reset(int(queue_.size()),queueIndex_);queueDirty_=true;}else{queueIndex_=upcomingIndices_[i];playbackOrder_.select(queueIndex_);selected_=i;}
         current_=queue_[queueIndex_];artwork({current_});startCurrent();fetch(2,current_.id);requestLyrics(current_);
     }
     void playNextSong(const Song& song){
         if(song.id.empty())return;
-        if(current_.id.empty()||queue_.empty()){queue_={song};queueIndex_=0;playbackOrder_.reset(1,0);current_=song;startCurrent();fetch(2,song.id);requestLyrics(song);artwork({song});return;}
+        if(current_.id.empty()||queue_.empty()){queue_={song};queueDirty_=true;queueIndex_=0;playbackOrder_.reset(1,0);current_=song;startCurrent();fetch(2,song.id);requestLyrics(song);artwork({song});return;}
         if(song.id==current_.id){notice_="This song is already playing.";return;}
-        if(enqueue_next(queue_,queueIndex_,song,playbackOrder_)){artwork({current_});notice_="Playing next: "+song.title;checkpoint(true);if(tab_==3){selected_=0;listScroll_.reset();}}
+        if(enqueue_next(queue_,queueIndex_,song,playbackOrder_)){queueDirty_=true;artwork({current_});notice_="Playing next: "+song.title;checkpoint(true);if(tab_==3){selected_=0;listScroll_.reset();}}
     }
     void playNextSelected(){if(playlistBrowser()){notice_="Open a playlist to select a song first.";return;}
         if(fullscreen_){notice_="Select a song in the list, then press Y.";return;}if(tab_==1&&searchKind_!=0){notice_="Open the album or artist to choose a song.";return;}
@@ -184,9 +193,9 @@ public:
     }
     void next(int direction,bool automatic=false){
         if(queue_.empty()){notice_="Choose a song to start the queue.";return;}
-        if(playbackOrder_.size()!=int(queue_.size()))playbackOrder_.reset(int(queue_.size()),queueIndex_);
+        if(playbackOrder_.size()!=int(queue_.size()))playbackOrder_.reset(int(queue_.size()),queueIndex_);queueDirty_=true;
         int i=playbackOrder_.step(direction,automatic);
-        if(i<0&&direction>0&&!playbackOrder_.shuffle&&playbackOrder_.repeat==0){std::set<std::string> ids;for(const auto& s:queue_)ids.insert(s.id);for(const auto& s:relatedRows_)if(relatedFor_==current_.id&&ids.insert(s.id).second)queue_.push_back(s);playbackOrder_.reset(int(queue_.size()),queueIndex_);i=playbackOrder_.step(1);}
+        if(i<0&&direction>0&&!playbackOrder_.shuffle&&playbackOrder_.repeat==0){std::set<std::string> ids;for(const auto& s:queue_)ids.insert(s.id);for(const auto& s:relatedRows_)if(relatedFor_==current_.id&&ids.insert(s.id).second)queue_.push_back(s);playbackOrder_.reset(int(queue_.size()),queueIndex_);queueDirty_=true;i=playbackOrder_.step(1);}
         if(i<0){notice_="Queue finished. Pick another song.";return;}
         queueIndex_=i;current_=queue_[i];artwork({current_});startCurrent();fetch(2,current_.id);requestLyrics(current_);
     }
@@ -262,7 +271,11 @@ public:
             try{if(!reuseArtwork(song)){auto bytes=http(song.cover,"",{},cancel.get(),browserUA,2*1024*1024);if(!cancel->load()){if(song.cover.find("googleusercontent.com/")==std::string::npos&&song.cover.find("ytimg.com/")==std::string::npos)disk_cache().put("get-v1|"+song.cover,bytes);disk_cache().put("art-ref|"+song.id,song.cover);prepareArtwork(song,bytes);}}}catch(...){}
             {std::lock_guard<std::mutex> lock(dataMutex_);artInFlight_.clear();artInFlightCover_.clear();artCancel_.reset();}
         }});
-        lyricsWorker_=std::thread([this]{prefer_cpu(0);while(!closing_){Song song;{std::unique_lock<std::mutex> lock(dataMutex_);lyricsCv_.wait(lock,[this]{return closing_||lyricsRequested_;});if(closing_)break;song=lyricsRequest_;lyricsRequested_=false;}Lyrics lyrics;try{lyrics=api_.lyrics(song,&closing_);}catch(...){lyrics.status="Lyrics unavailable right now. Tap here to retry.";}std::lock_guard<std::mutex> lock(dataMutex_);lyricPending_[song.id]=std::move(lyrics);}});
+        lyricsWorker_=std::thread([this]{prefer_cpu(0);while(!closing_){Song song;std::shared_ptr<std::atomic<bool>> cancel;
+            {std::unique_lock<std::mutex> lock(dataMutex_);lyricsCv_.wait(lock,[this]{return closing_||lyricsRequested_;});if(closing_)break;song=lyricsRequest_;lyricsRequested_=false;lyricCancel_=cancel=std::make_shared<std::atomic<bool>>(false);}
+            Lyrics lyrics;try{lyrics=api_.lyrics(song,cancel.get());}catch(...){lyrics.status="Lyrics unavailable right now. Tap here to retry.";}
+            {std::lock_guard<std::mutex> lock(dataMutex_);if(!closing_&&!cancel->load()&&song.id==lyricDesired_)lyricPending_[song.id]=std::move(lyrics);if(lyricCancel_==cancel)lyricCancel_.reset();}
+        }});
 #endif
 #ifdef __SWITCH__
         libraryPath_="sdmc:/switch/echonx/library.json";padConfigureInput(1,HidNpadStyleSet_NpadStandard);padInitializeDefault(&pad_);
@@ -273,18 +286,18 @@ public:
         library_=load_library(libraryPath_);
         auto parent=std::filesystem::path(libraryPath_).parent_path();
 #ifdef ECHO_PREVIEW
-        const char* stateRoot=std::getenv("ECHONX_STATE_DIR");if(stateRoot)parent=stateRoot;
+        const char* stateRoot=std::getenv("ECHONX_STATE_DIR");if(stateRoot){parent=stateRoot;libraryPath_=(parent/"library.json").string();library_=load_library(libraryPath_);}
 #endif
         sessionPath_=(parent/"session.json").string();playlistsPath_=(parent/"playlists.json").string();playlists_=load_playlists(playlistsPath_);historyPath_=(parent/"history.json").string();history_=load_history(historyPath_);rebuildHistory();
         auto session=load_session(sessionPath_);if(!session.queue.empty()&&playbackOrder_.restore(session.order,session.current)){queue_=std::move(session.queue);queueIndex_=session.current;current_=queue_[queueIndex_];playbackOrder_.shuffle=session.shuffle;playbackOrder_.repeat=session.repeat;resumePosition_=session.position;resumeDuration_=session.duration;resumePending_=true;notice_="Previous session ready. Press Play to resume.";artwork({current_});requestLyrics(current_);}
 #ifndef ECHO_PREVIEW
-        sessionWriter_=std::make_unique<SessionWriter>(sessionPath_);historyWriter_=std::make_unique<SessionWriter>(historyPath_);playlistWriter_=std::make_unique<SessionWriter>(playlistsPath_);
+        sessionWriter_=std::make_unique<SessionWriter>(sessionPath_);historyWriter_=std::make_unique<SessionWriter>(historyPath_);playlistWriter_=std::make_unique<SessionWriter>(playlistsPath_);libraryWriter_=std::make_unique<SessionWriter>(libraryPath_);
 #else
-        if(stateRoot){sessionWriter_=std::make_unique<SessionWriter>(sessionPath_);historyWriter_=std::make_unique<SessionWriter>(historyPath_);playlistWriter_=std::make_unique<SessionWriter>(playlistsPath_);}
+        if(stateRoot){sessionWriter_=std::make_unique<SessionWriter>(sessionPath_);historyWriter_=std::make_unique<SessionWriter>(historyPath_);playlistWriter_=std::make_unique<SessionWriter>(playlistsPath_);libraryWriter_=std::make_unique<SessionWriter>(libraryPath_);}
 #endif
         fetch(0);
     }
-    ~App(){collectHistory();checkpoint(true);sessionWriter_.reset();historyWriter_.reset();playlistWriter_.reset();if(backlightOff_)setBacklight(false);closing_=true;{std::lock_guard<std::mutex> lock(dataMutex_);if(fetchCancel_)fetchCancel_->store(true);if(artCancel_)artCancel_->store(true);}fetchCv_.notify_one();artCacheCv_.notify_one();artCv_.notify_one();lyricsCv_.notify_one();player_.reset();if(fetch_.joinable())fetch_.join();if(artCacheWorker_.joinable())artCacheWorker_.join();if(art_.joinable())art_.join();if(lyricsWorker_.joinable())lyricsWorker_.join();
+    ~App(){collectHistory();checkpoint(true);sessionWriter_.reset();historyWriter_.reset();playlistWriter_.reset();if(libraryWriter_&&libraryWriter_->completed()<libraryTicket_)libraryWriter_->submitLibrary(library_);libraryWriter_.reset();if(backlightOff_)setBacklight(false);closing_=true;{std::lock_guard<std::mutex> lock(dataMutex_);if(lyricCancel_)lyricCancel_->store(true);if(fetchCancel_)fetchCancel_->store(true);if(artCancel_)artCancel_->store(true);}fetchCv_.notify_one();artCacheCv_.notify_one();artCv_.notify_one();lyricsCv_.notify_one();player_.reset();if(fetch_.joinable())fetch_.join();if(artCacheWorker_.joinable())artCacheWorker_.join();if(art_.joinable())art_.join();if(lyricsWorker_.joinable())lyricsWorker_.join();
 #ifdef __SWITCH__
         if(focusHooked_)appletUnhook(&hook_);appletSetMediaPlaybackState(false);if(audioControlReady_)audctlExit();
 #endif
@@ -456,7 +469,7 @@ public:
             if(event.type==SDL_MOUSEWHEEL&&!fullscreen_)listScroll_.offset=std::clamp(listScroll_.offset-event.wheel.y*48.f,0.f,std::max(0.f,float(rowCount()*72)-390));
             if(event.type==SDL_KEYDOWN){switch(event.key.keysym.sym){case SDLK_PLUS:case SDLK_EQUALS:case SDLK_KP_PLUS:if(!event.key.repeat)action(10);break;case SDLK_MINUS:case SDLK_KP_MINUS:if(!event.key.repeat)action(11);break;case SDLK_RETURN:action(0);break;case SDLK_ESCAPE:action(menu_.empty()?12:1);break;case SDLK_UP:action(4);break;case SDLK_DOWN:action(5);break;case SDLK_x:action(2);break;case SDLK_SPACE:if(menu_.empty())togglePlayback();break;case SDLK_y:action(3);break;case SDLK_LEFT:action(14);break;case SDLK_RIGHT:action(15);break;case SDLK_q:action(6);break;case SDLK_e:action(7);break;}}
         }
-        pollSongHold(SDL_GetTicks());applyPending();pollPlaylistStorage();collectHistory();if(historyWriter_){auto error=historyWriter_->takeError();if(!error.empty())notice_=error;}if(player_->ended())next(1,true);checkpoint();if(sessionWriter_){auto error=sessionWriter_->takeError();if(!error.empty())notice_=error;}
+        pollSongHold(SDL_GetTicks());applyPending();pollLibraryStorage();pollPlaylistStorage();collectHistory();if(historyWriter_){auto error=historyWriter_->takeError();if(!error.empty())notice_=error;}if(player_->ended())next(1,true);checkpoint();if(sessionWriter_){auto error=sessionWriter_->takeError();if(!error.empty())notice_=error;}
 #ifdef __SWITCH__
         appletSetMediaPlaybackState(player_->active());
 #endif

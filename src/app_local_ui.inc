@@ -54,14 +54,16 @@
             {"Cancel",[this]{}}});
     }
     void songOptions(){
-        if(playlistBrowser()){if(selected_<int(playlists_.size()))playlistOptions(playlists_[selected_].id);else newPlaylist();return;}
-        auto& rows=visible();Song song=fullscreen_?current_:selected_<int(rows.size())?rows[selected_]:current_;if(song.id.empty()){if(tab_==2)openMenu("Your library",{{"New playlist...",[this]{newPlaylist();}},{"Cancel",[this]{}}});else notice_="Choose a song first.";return;}
+        if(!fullscreen_&&playlistBrowser()){if(selected_<int(playlists_.size()))playlistOptions(playlists_[selected_].id);else newPlaylist();return;}
+        Song song;
+        if(fullscreen_)song=current_;else{auto& rows=visible();if(selected_>=0&&selected_<int(rows.size()))song=rows[selected_];}
+        if(song.id.empty()){if(!fullscreen_&&tab_==2)openMenu("Your library",{{"New playlist...",[this]{newPlaylist();}},{"Cancel",[this]{}}});else notice_="Choose a song first.";return;}
         if(tab_==1&&searchKind_!=0&&!fullscreen_){openMenu(song.title,{{searchKind_==1?"Open album":"Open artist",[this,song]{if(searchKind_==1)openAlbum(song);else openArtist(song);}},{"Cancel",[this]{}}});return;}
         std::vector<MenuEntry> options{{"Add to playlist",[this,song]{playlistPicker(song);}}};
         options.push_back({"Play next",[this,song]{playNextSong(song);}});
         bool saved=std::any_of(library_.begin(),library_.end(),[&](const Song& entry){return entry.id==song.id;});
         options.push_back({saved?"Remove from library":"Save to library",[this,song]{favorite(song);selected_=std::min(selected_,std::max(0,rowCount()-1));}});
-        if(tab_==2&&playlistsView_&&activePlaylist_>=0){auto id=playlists_[activePlaylist_].id;options.push_back({"Remove from this playlist",[this,id,song]{int i=findPlaylist(id);if(i<0)return;auto& tracks=playlists_[i].tracks;tracks.erase(std::remove_if(tracks.begin(),tracks.end(),[&](const Song& s){return s.id==song.id;}),tracks.end());if(commitPlaylists()){selected_=std::min(selected_,std::max(0,int(tracks.size())-1));notice_="Removed from playlist.";}}});}
+        if(!fullscreen_&&tab_==2&&playlistsView_&&activePlaylist_>=0){auto id=playlists_[activePlaylist_].id;options.push_back({"Remove from this playlist",[this,id,song]{int i=findPlaylist(id);if(i<0)return;auto& tracks=playlists_[i].tracks;tracks.erase(std::remove_if(tracks.begin(),tracks.end(),[&](const Song& s){return s.id==song.id;}),tracks.end());if(commitPlaylists()){selected_=std::min(selected_,std::max(0,int(tracks.size())-1));notice_="Removed from playlist.";}}});}
         options.push_back({"Cancel",[this]{}});openMenu(song.title,std::move(options));
     }
     void drawMenu(){

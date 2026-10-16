@@ -1,9 +1,9 @@
     static int resultTab(int mode){return mode==0?0:mode==1?1:mode==3?4:mode==4?5:-1;}
     void fetch(int mode,const std::string& value="",bool fresh=false){
-        FetchJob job;job.mode=mode;job.searchKind=searchKind_;job.value=value;job.fresh=fresh;job.anchor=mode==4?albumAnchor_:artistAnchor_;job.playing=current_;job.saved=library_;job.offset=homeOffset_;if(mode==0)++homeOffset_;
-        {std::lock_guard<std::mutex> lock(dataMutex_);job.revision=++fetchRevisions_[mode];fetchQueue_.erase(std::remove_if(fetchQueue_.begin(),fetchQueue_.end(),[&](const FetchJob& old){return old.mode==mode;}),fetchQueue_.end());if(fetchCancel_&&fetchActiveMode_==mode)fetchCancel_->store(true);loading_=true;
+        FetchJob job;job.mode=mode;job.searchKind=searchKind_;job.value=value;job.fresh=fresh;job.anchor=mode==4?albumAnchor_:artistAnchor_;job.playing=current_;if(mode==0)job.saved=library_;job.offset=homeOffset_;if(mode==0)++homeOffset_;
+        {std::lock_guard<std::mutex> lock(dataMutex_);job.revision=++fetchRevisions_[mode];fetchQueue_.erase(std::remove_if(fetchQueue_.begin(),fetchQueue_.end(),[&](const FetchJob& old){return old.mode==mode;}),fetchQueue_.end());if(fetchCancel_&&(fetchActiveMode_==mode||mode!=2))fetchCancel_->store(true);loading_=true;
 #ifndef ECHO_PREVIEW
-            fetchQueue_.push_back(job);
+            if(mode==2)fetchQueue_.push_back(job);else fetchQueue_.push_front(job);
 #endif
         }
 #ifdef ECHO_PREVIEW
@@ -21,7 +21,7 @@
                         result.rows.erase(std::remove_if(result.rows.begin(),result.rows.end(),[&](const Song& song){return song.id==job.value;}),result.rows.end());}
                     if(result.rows.empty())result.notice="No songs returned. Open Search or retry Refresh.";
                 }catch(const std::exception& e){result.notice=std::string(e.what())+"  Tap Refresh to retry.";}
-                {std::lock_guard<std::mutex> lock(dataMutex_);if(!closing_&&!cancel->load()&&job.revision==fetchRevisions_[job.mode])pendingFetch_.push_back(std::move(result));fetchActiveMode_=-1;fetchCancel_.reset();loading_=!fetchQueue_.empty();}
+                {std::lock_guard<std::mutex> lock(dataMutex_);if(!closing_&&job.revision==fetchRevisions_[job.mode]){if(!cancel->load())pendingFetch_.push_back(std::move(result));else fetchQueue_.push_back(std::move(job));}fetchActiveMode_=-1;fetchCancel_.reset();loading_=!fetchQueue_.empty();}
             }
         });fetchCv_.notify_one();
 #endif
