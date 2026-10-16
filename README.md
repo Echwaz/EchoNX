@@ -42,6 +42,16 @@ Your saved library lives at `sd:/switch/echonx/library.json`.
 - **Lyrics and album details vary:** some songs have synced lyrics, some have plain lyrics, and others have none.
 - **Still in development:** service changes and network interruptions can affect playback. Artwork cache limits and streaming retries are implemented, but long-session stability still needs device testing.
 
+## Session and local playlists
+
+EchoNX restores the last queue, song position, shuffle order, and repeat mode without autoplay. Press Play to continue. Sessions are checkpointed every 10 seconds and saved when leaving the app.
+
+Open **Library → Playlists** to create, rename, play, or delete a local playlist. Select a song and press **X**, then choose **Add to playlist**. The same menu removes songs from an open playlist. Playlist entries still stream over Wi-Fi.
+
+Session and playlist data are stored in `sd:/switch/echonx/session.json` and `sd:/switch/echonx/playlists.json`, with backup files.
+
+Open **Library → History** to revisit the 200 most recently played songs. A replay moves the song to the top; restored sessions and failed connections do not count as plays. History is stored locally in `sd:/switch/echonx/history.json`.
+
 ## Screenshots
 
 | Main screen | Fullscreen player | Album art mode |
@@ -54,7 +64,7 @@ Your saved library lives at `sd:/switch/echonx/library.json`.
 | --- | --- |
 | A | Play the selected song; in fullscreen, play/pause |
 | B | Leave fullscreen or return to Home |
-| X | Search for a song or artist |
+| X | Open song/playlist options |
 | Y | Queue the selected song to play next (song lists) |
 | Up/down or either analog stick | Move the song selection |
 | L / R | Switch tabs |

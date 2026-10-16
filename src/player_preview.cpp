@@ -2,7 +2,7 @@
 namespace echo {
 Player::Player(Api& a):api_(a){}
 Player::~Player(){}
-void Player::play(const Song&){}
+void Player::play(const Song&,double start){position_=start;started_=true;}
 void Player::stop(){}
 void Player::toggle(){}
 void Player::seek(double){}

@@ -52,7 +52,7 @@ Player::~Player(){stop();if(device_)SDL_CloseAudioDevice(device_);}
 void Player::status(const std::string& s){std::lock_guard<std::mutex> l(mutex_);status_=s;}
 std::string Player::status()const{std::lock_guard<std::mutex> l(mutex_);return status_;}
 void Player::stop(){abort_=true;if(worker_.joinable())worker_.join();SDL_ClearQueuedAudio(device_);SDL_PauseAudioDevice(device_,1);active_=false;done_=false;}
-void Player::play(const Song& song){stop();abort_=false;paused_=false;done_=false;seek_=-1;position_=0;duration_=0;active_=true;status("Connecting to YouTube Music");SDL_PauseAudioDevice(device_,0);worker_=std::thread([this,song]{decode(song);});}
+void Player::play(const Song& song,double startSeconds){stop();started_=false;abort_=false;paused_=false;done_=false;seek_=startSeconds>0?startSeconds:-1;position_=std::max(0.,startSeconds);duration_=0;active_=true;status("Connecting to YouTube Music");SDL_PauseAudioDevice(device_,0);worker_=std::thread([this,song]{decode(song);});}
 void Player::toggle(){if(!active_)return;paused_=!paused_.load();SDL_PauseAudioDevice(device_,paused_?1:0);}
 void Player::seek(double s){if(active_ && duration_>0)seek_=std::max(0.0,std::min(s,duration_.load()-0.1));}
 void Player::decode(const Song& song){
@@ -77,6 +77,7 @@ void Player::decode(const Song& song){
         check(swr_alloc_set_opts2(&m.resampler,&layout,AV_SAMPLE_FMT_S16,48000,&m.codec->ch_layout,m.codec->sample_fmt,m.codec->sample_rate,0,nullptr),"Configure audio conversion");
         check(swr_init(m.resampler),"Initialize audio conversion");
         duration_=m.format->duration>0?double(m.format->duration)/AV_TIME_BASE:0;
+        if(seek_>0&&duration_>0)seek_=std::min(seek_.load(),std::max(0.,duration_.load()-.1));
         status("Playing audio only");int64_t samples=0;double base=0;
         auto consume=[&]{
             while(!abort_){
@@ -89,6 +90,7 @@ void Player::decode(const Song& song){
                 }
                 if(abort_ || seek_>=0){av_frame_unref(m.frame);break;}
                 if(SDL_QueueAudio(device_,pcm.data(),count*4)!=0)throw std::runtime_error(SDL_GetError());
+                if(count>0)started_=true;
                 samples+=count;position_=base+double(samples)/48000-double(SDL_GetQueuedAudioSize(device_))/192000;av_frame_unref(m.frame);
             }
         };

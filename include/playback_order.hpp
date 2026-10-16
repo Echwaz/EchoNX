@@ -18,6 +18,11 @@ public:
         current=std::clamp(current,0,size-1);
         if(shuffle){std::swap(order_[0],order_[current]);std::shuffle(order_.begin()+1,order_.end(),random_);position_=0;}else position_=current;
     }
+    bool restore(const std::vector<int>& order,int current){
+        auto sorted=order;std::sort(sorted.begin(),sorted.end());for(int i=0;i<int(sorted.size());++i)if(sorted[i]!=i)return false;
+        auto found=std::find(order.begin(),order.end(),current);if(found==order.end())return false;
+        order_=order;position_=int(found-order.begin());return true;
+    }
     void promoteNext(int index){
         if(order_.empty()||index<0||index>=size()||order_[position_]==index)return;
         int current=order_[position_];auto found=std::find(order_.begin(),order_.end(),index);
