@@ -1,3 +1,10 @@
+    int librarySection()const{return historyView_?2:playlistsView_?1:0;}
+    void selectLibrarySection(int section){
+        if(section==librarySection())return;
+        if(section==0)showSavedSongs();else if(section==1)showPlaylistRoot();else showHistory();
+        artworkStart_=artworkTab_=-1;hits_.clear();
+    }
+    void stepLibrarySection(int direction){selectLibrarySection((librarySection()+direction+3)%3);}
     void rebuildHistory(){historyRows_.clear();for(const auto& entry:history_)historyRows_.push_back(entry.song);}
     void showHistory(){historyView_=true;playlistsView_=false;activePlaylist_=-1;tab_=2;fullscreen_=false;selected_=0;listScroll_.reset();artwork(historyRows_);}
     void showSavedSongs(){tab_=2;fullscreen_=false;historyView_=playlistsView_=false;activePlaylist_=-1;selected_=0;listScroll_.reset();artwork(library_);}
@@ -48,12 +55,13 @@
     }
     void songOptions(){
         if(playlistBrowser()){if(selected_<int(playlists_.size()))playlistOptions(playlists_[selected_].id);else newPlaylist();return;}
-        auto& rows=visible();Song song=fullscreen_?current_:selected_<int(rows.size())?rows[selected_]:current_;if(song.id.empty()){if(tab_==2){std::vector<MenuEntry> entries{{"Your playlists",[this]{showPlaylistRoot();}},{"New playlist...",[this]{newPlaylist();}},{"Recently played",[this]{showHistory();}},{"Search songs",[this]{search();}},{"Cancel",[this]{}}};if(historyView_)entries.insert(entries.begin(),{"Library",[this]{showSavedSongs();}});openMenu("Your library",std::move(entries));}else notice_="Choose a song first.";return;}
+        auto& rows=visible();Song song=fullscreen_?current_:selected_<int(rows.size())?rows[selected_]:current_;if(song.id.empty()){if(tab_==2)openMenu("Your library",{{"New playlist...",[this]{newPlaylist();}},{"Cancel",[this]{}}});else notice_="Choose a song first.";return;}
+        if(tab_==1&&searchKind_!=0&&!fullscreen_){openMenu(song.title,{{searchKind_==1?"Open album":"Open artist",[this,song]{if(searchKind_==1)openAlbum(song);else openArtist(song);}},{"Cancel",[this]{}}});return;}
         std::vector<MenuEntry> options{{"Add to playlist",[this,song]{playlistPicker(song);}}};
+        options.push_back({"Play next",[this,song]{playNextSong(song);}});
+        bool saved=std::any_of(library_.begin(),library_.end(),[&](const Song& entry){return entry.id==song.id;});
+        options.push_back({saved?"Remove from library":"Save to library",[this,song]{favorite(song);selected_=std::min(selected_,std::max(0,rowCount()-1));}});
         if(tab_==2&&playlistsView_&&activePlaylist_>=0){auto id=playlists_[activePlaylist_].id;options.push_back({"Remove from this playlist",[this,id,song]{int i=findPlaylist(id);if(i<0)return;auto& tracks=playlists_[i].tracks;tracks.erase(std::remove_if(tracks.begin(),tracks.end(),[&](const Song& s){return s.id==song.id;}),tracks.end());if(commitPlaylists()){selected_=std::min(selected_,std::max(0,int(tracks.size())-1));notice_="Removed from playlist.";}}});}
-        if(tab_==2&&!playlistsView_)options.push_back({"Your playlists",[this]{showPlaylistRoot();}});
-        if(tab_==2&&!historyView_)options.push_back({"Recently played",[this]{showHistory();}});
-        if(tab_==2&&historyView_)options.push_back({"Library",[this]{showSavedSongs();}});
         options.push_back({"Cancel",[this]{}});openMenu(song.title,std::move(options));
     }
     void drawMenu(){

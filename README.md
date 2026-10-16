@@ -11,7 +11,7 @@ EchoNX is a native homebrew music player for Switch consoles running custom firm
 ## Features
 
 - **Standalone streaming:** music plays directly on the Switch over Wi-Fi.
-- **Search and browse:** find songs and open artist or album pages.
+- **Search and browse:** search Songs, Albums, or Artists; open an album or artist result to browse its songs. Use D-pad left/right in Search to switch categories.
 - **Your library:** save songs to the SD card and get recommendations based on your saved tracks.
 - **Fullscreen player:** blurred artwork background, scrolling titles, and touch playback controls.
 - **Lyrics:** animated synced lyrics, plus touch scrolling for lyrics without timestamps.
@@ -31,7 +31,9 @@ EchoNX is a native homebrew music player for Switch consoles running custom firm
 1. Copy `echonx.nro` to `sd:/switch/echonx/echonx.nro`.
 2. Connect your Switch to Wi-Fi and launch EchoNX through Homebrew Menu.
 3. Press **X** to search, select a song, and press **A** to play.
-4. Press **−** to save the current song. Tap its cover to open the fullscreen player.
+4. Press **X** for More and choose **Save to library**. Press the **minus button** to search. Tap the cover to open fullscreen.
+
+Within Library, use **D-pad left/right** or tap **Saved**, **Playlists**, and **History** to switch sections. Press **B** inside a playlist to return to the playlist list.
 
 Your saved library lives at `sd:/switch/echonx/library.json`.
 
@@ -64,17 +66,18 @@ Open **Library → History** to revisit the 200 most recently played songs. A re
 | --- | --- |
 | A | Play the selected song; in fullscreen, play/pause |
 | B | Leave fullscreen or return to Home |
-| X | Open song/playlist options |
+| X | Open More to save/remove a song or manage playlists |
 | Y | Queue the selected song to play next (song lists) |
 | Up/down or either analog stick | Move the song selection |
+| Left / right | Switch Saved, Playlists, and History within Library |
 | L / R | Switch tabs |
 | ZL / ZR | Previous / next song |
-| − | Save/remove the current song; in album art mode, toggle the backlight |
+| − | Open Search; in album art mode, toggle the backlight |
 | + | Enter or leave album art mode |
 | Right stick click | Exit the app |
-| Left stick click | Open the artist page |
+| Left stick click | Toggle main view / fullscreen player |
 
-**Touchscreen:** swipe the song list or plain lyrics, tap or drag the progress bar to seek, and tap the cover to enter or leave fullscreen. In fullscreen, tap the artist or album name to open its page.
+**Touchscreen:** hold a song for about half a second to open More, including Play next. Swipe the song list or plain lyrics, tap or drag the progress bar to seek, and tap the cover to enter or leave fullscreen. In fullscreen, tap the artist or album name to open its page.
 
 In album art mode, press **−** to turn the backlight off or on while music continues. While the screen is lit, tap to show or hide the clock. Other app controls are ignored. Press **+** to turn the screen on and return to the previous view. This does not put the console to sleep. Artwork follows the playing song, including automatic track changes.
 

@@ -16,7 +16,7 @@ class Api {
     Json context(); Json call(const std::string& endpoint,Json payload,bool fresh=false,std::atomic<bool>* abort=nullptr);
 public:
     std::vector<Song> home(bool fresh=false,std::atomic<bool>* abort=nullptr);
-    std::vector<Song> search(const std::string& query,bool fresh=false,std::atomic<bool>* abort=nullptr);
+    std::vector<Song> search(const std::string& query,bool fresh=false,std::atomic<bool>* abort=nullptr,int kind=0);
     std::vector<Song> related(const std::string& id,bool fresh=false,std::atomic<bool>* abort=nullptr);
     std::vector<Song> artist(const Song& song,bool fresh=false,std::atomic<bool>* abort=nullptr);
     std::vector<Song> album(const Song& song,bool fresh=false,std::atomic<bool>* abort=nullptr);

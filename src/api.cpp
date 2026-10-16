@@ -1,4 +1,5 @@
 #include "api.hpp"
+#include "search_results.hpp"
 #include "disk_cache.hpp"
 #include <curl/curl.h>
 #include <stdexcept>
@@ -55,7 +56,7 @@ Json Api::call(const std::string& endpoint,Json payload,bool fresh,std::atomic<b
     auto v=str(root,"/responseContext/visitorData");if(!v.empty())visitor_=v;auto stored=root;stored.erase("responseContext");disk_cache().put(cacheKey,stored.dump());return root;
 }
 std::vector<Song> Api::home(bool fresh,std::atomic<bool>* abort){std::lock_guard<std::mutex> l(mutex_);return songs(call("browse",{{"browseId","FEmusic_home"}},fresh,abort));}
-std::vector<Song> Api::search(const std::string& q,bool fresh,std::atomic<bool>* abort){std::lock_guard<std::mutex> l(mutex_);return songs(call("search",{{"query",q},{"params","EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D"}},fresh,abort));}
+std::vector<Song> Api::search(const std::string& q,bool fresh,std::atomic<bool>* abort,int kind){std::lock_guard<std::mutex> l(mutex_);return search_results(call("search",{{"query",q},{"params",search_params(kind)}},fresh,abort),kind);}
 std::vector<Song> Api::related(const std::string& id,bool fresh,std::atomic<bool>* abort){std::lock_guard<std::mutex> l(mutex_);return songs(call("next",{{"videoId",id},{"playlistId","RDAMVM"+id},{"isAudioOnly",true}},fresh,abort));}
 std::vector<Song> Api::for_saved(const std::vector<Song>& saved,size_t offset,bool fresh,std::atomic<bool>* abort){
     if(saved.empty())return home(fresh,abort);std::vector<std::vector<Song>> feeds;std::string lastError;
